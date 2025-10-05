@@ -19,13 +19,12 @@ pub fn main() !void {
     const source = try cwd().readFileAllocOptions(gpa, file, std.math.maxInt(u32), null, @alignOf(u8), 0);
     defer gpa.free(source);
 
-    const tokens = try Lexer.lex(gpa, source);
-    defer gpa.free(tokens);
+    var tokens = try Lexer.lex(gpa, source);
+    defer tokens.deinit();
 
-    for (tokens) |token|
-        std.debug.print("token.{s}: '{s}'\n", .{@tagName(token.kind), token.slice(source)});
+    tokens.debug(source);
 
-    const ast = try Parser.parse(gpa, tokens, source);
+    const ast = try Parser.parse(gpa, &tokens, source);
     defer ast.deinit();
 
     ast.debug(tokens, source, 0, 0);

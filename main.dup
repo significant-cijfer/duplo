@@ -1,4 +1,4 @@
 fn main() i32 {
     return;
-    return 1 + 2;
+    return 1 + 2 + pow(2, 3);
 };

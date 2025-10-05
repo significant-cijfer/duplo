@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 const Lexer = @import("lexer.zig");
+const Tokens = Lexer.Tokens;
 const Token = Lexer.Token;
 
 const Error = error {
@@ -18,11 +19,6 @@ const Error = error {
 pub const Ast = struct {
     nodes: ArrayList(Node),
     extra: ArrayList(u32),
-
-    pub fn extraSlice(self: Ast, idx: u32) []u32 {
-        const len = self.extra.items[idx];
-        return self.extra.items[idx+1..idx+len+1];
-    }
 
     pub fn deinit(self: Ast) void {
         self.nodes.deinit();
@@ -43,14 +39,18 @@ pub const Ast = struct {
 
     fn pushExtraList(self: *Ast, nodes: []u32) !u32 {
         const idx = self.extra.items.len;
-        try self.extra.append(@intCast(nodes.len));
         try self.extra.appendSlice(nodes);
         return @intCast(idx);
     }
 
+    pub fn extras(self: Ast, ext: Node.Extra) []u32 {
+        const list = ext.list;
+        return self.extra.items[list.idx..list.idx+list.len];
+    }
+
     pub fn debug(
         self: Ast,
-        tokens: []const Token,
+        tokens: Tokens,
         source: [:0]const u8,
         idx: u32,
         depth: u32
@@ -61,32 +61,48 @@ pub const Ast = struct {
             std.debug.print("  ", .{});
 
         switch (node.kind) {
-            .root =>
-                std.debug.print("root\n", .{}),
-            else =>
-                std.debug.print("{s}\n", .{tokens[node.main].slice(source)}),
+            .root => std.debug.print("root\n", .{}),
+            .fcall => std.debug.print("fcall\n", .{}),
+            .fproto => std.debug.print("fproto\n", .{}),
+            else => std.debug.print("{s}\n", .{tokens.at(node.main).slice(source)}),
         }
 
         switch (node.kind) {
-            .root,
-            .block => {
-                const slice = self.extraSlice(node.extra.lhs);
-                for (slice) |ndx| {
-                    self.debug(tokens, source, ndx, depth+1);
+            .root => {
+                const roots = self.extras(node.extra);
+
+                for (roots) |root| {
+                    self.debug(tokens, source, root, depth+1);
                 }
             },
-            .integer,
-            .identifier => {},
-            .structdef => @panic("TODO(debug), implement debug for structdef"),
-            .ref,
-            .deref => {
-                self.debug(tokens, source, node.extra.lhs, depth+1);
+            .fdecl => {
+                self.debug(tokens, source, node.extra.fdecl.proto, depth+1);
+                self.debug(tokens, source, node.extra.fdecl.body, depth+1);
             },
-            .dot => {
-                self.debug(tokens, source, node.extra.lhs, depth+1);
-                for (0..depth+1) |_|
-                    std.debug.print("  ", .{});
-                std.debug.print("{s}\n", .{tokens[node.main+1].slice(source)});
+            .fcall => {
+                self.debug(tokens, source, node.extra.fcall.func, depth+1);
+                self.debug(tokens, source, node.extra.fcall.args, depth+1);
+            },
+            .fproto => {
+                self.debug(tokens, source, node.extra.fproto.prms, depth+1);
+                self.debug(tokens, source, node.extra.fproto.rtyp, depth+1);
+            },
+            .integer => {},
+            .identifier => {},
+            .structdef => {
+                const mmbrs = self.extras(node.extra);
+
+                for (mmbrs) |mmbr| {
+                    self.debug(tokens, source, mmbr, depth+1);
+                }
+            },
+            .block,
+            .list => {
+                const stmts = self.extras(node.extra);
+
+                for (stmts) |stmt| {
+                    self.debug(tokens, source, stmt, depth+1);
+                }
             },
             .add,
             .sub,
@@ -95,28 +111,23 @@ pub const Ast = struct {
             .assign,
             .logand,
             .logior => {
-                self.debug(tokens, source, node.extra.lhs, depth+1);
-                self.debug(tokens, source, node.extra.rhs, depth+1);
+                self.debug(tokens, source, node.extra.bin_op.lhs, depth+1);
+                self.debug(tokens, source, node.extra.bin_op.rhs, depth+1);
+            },
+            .dot => {
+                self.debug(tokens, source, node.extra.mon_op, depth+1);
+            },
+            .ref,
+            .deref => {
+                self.debug(tokens, source, node.extra.mon_op, depth+1);
             },
             .ternary => {
-                self.debug(tokens, source, node.extra.lhs, depth+1);
-                self.debug(tokens, source, node.extra.rhs+0, depth+1);
-                self.debug(tokens, source, node.extra.rhs+1, depth+1);
+                self.debug(tokens, source, node.extra.tri_op.lhs, depth+1);
+                self.debug(tokens, source, node.extra.tri_op.mhs, depth+1);
+                self.debug(tokens, source, node.extra.tri_op.mhs+1, depth+1);
             },
-            .fn_decl => {
-                self.debug(tokens, source, node.extra.lhs+1, depth+1);
-                self.debug(tokens, source, node.extra.lhs+0, depth+1);
-            },
-            .fn_call => {
-                self.debug(tokens, source, node.extra.lhs, depth+1);
-
-                const slice = self.extraSlice(node.extra.rhs);
-                for (slice) |ndx|
-                    self.debug(tokens, source, ndx, depth+2);
-            },
-            .ret => {
-                if (node.extra.lhs != 0)
-                    self.debug(tokens, source, node.extra.lhs, depth+1);
+            .ret => if (node.extra.mon_op != 0) {
+                self.debug(tokens, source, node.extra.mon_op, depth+1);
             },
         }
     }
@@ -128,30 +139,70 @@ const Node = struct {
     extra: Extra,
 
     const Kind = enum {
-        root,
-        fn_decl,
-        fn_call,
-        integer,
-        identifier,
-        structdef,
-        block,
-        add,
-        sub,
-        mul,
-        div,
-        dot,
-        ref,
-        deref,
-        assign,
-        logand,
-        logior,
-        ternary,
-        ret,
+        root, //list
+        fdecl, //fdecl
+        fcall, //fcall
+        fproto, //fproto
+        integer, //none
+        identifier, //none
+        structdef, //list
+        block, //list
+        list, //list
+        add, //bo
+        sub, //bo
+        mul, //bo
+        div, //bo
+        dot, //mo
+        ref, //mo
+        deref, //mo
+        assign, //bo
+        logand, //bo
+        logior, //bo
+        ternary, //to
+        ret, //mo
     };
 
-    const Extra = struct {
-        lhs: u32,
-        rhs: u32
+    const Extra = union {
+        none: void,
+        list: List,
+        mon_op: MonOp,
+        bin_op: BinOp,
+        tri_op: TriOp,
+        fdecl: FnDecl,
+        fcall: FnCall,
+        fproto: FnProto,
+
+        const List = struct {
+            idx: u32,
+            len: u32,
+        };
+
+        const MonOp = u32;
+
+        const BinOp = struct {
+            lhs: u32,
+            rhs: u32,
+        };
+
+        const TriOp = struct {
+            lhs: u32,
+            mhs: u32, //rhs = mhs+1
+        };
+
+        const FnDecl = struct {
+            proto: u32,
+            body: u32,
+        };
+
+        const FnCall = struct {
+            func: u32,
+            args: u32,
+        };
+
+        const FnProto = struct {
+            prms: u32,
+            rtyp: u32,
+        };
     };
 };
 
@@ -196,42 +247,18 @@ const Op = enum {
         };
     }
 
-    //TODO(infixPower), reorganize and standardize
     fn infixPower(self: Op) ?Power {
         return switch (self) {
-            .assign => .{ .lbp = 2, .rbp = 3 },
+            .assign =>          .{ .lbp = 2, .rbp = 3 },
             .logand, .logior => .{ .lbp = 4, .rbp = 5 },
-            .add, .sub => .{ .lbp = 6, .rbp = 7 },
-            .mul, .div => .{ .lbp = 8, .rbp = 9 },
+            .add, .sub =>       .{ .lbp = 6, .rbp = 7 },
+            .mul, .div =>       .{ .lbp = 8, .rbp = 9 },
             else => null,
         };
     }
 };
 
-fn peek(tokens: []const Token, idx: *const u32) Token {
-    return tokens[idx.*];
-}
-
-fn next(tokens: []const Token, idx: *u32) Token {
-    const token = tokens[idx.*];
-    idx.* += 1;
-    return token;
-}
-
-fn skip(tokens: []const Token, idx: *u32) void {
-    switch (tokens[idx.*].kind) {
-        .eof => {},
-        else => idx.* += 1,
-    }
-}
-
-fn expect(tokens: []const Token, idx: *u32, kind: Token.Kind) !void {
-    if (peek(tokens, idx).kind != kind)
-        return error.UnexpectedToken;
-    skip(tokens, idx);
-}
-
-pub fn parse(gpa: Allocator, tokens: []const Token, source: [:0]const u8) !Ast {
+pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
     var tree = Ast{
         .nodes = .init(gpa),
         .extra = .init(gpa),
@@ -240,43 +267,33 @@ pub fn parse(gpa: Allocator, tokens: []const Token, source: [:0]const u8) !Ast {
     var roots = ArrayList(u32).init(gpa);
     defer roots.deinit();
 
-    //TODO(parse), replace root with struct
-    try tree.nodes.append(.{
-        .main = undefined,
-        .kind = .root,
-        .extra = .{
-            .lhs = undefined,
-            .rhs = undefined,
-        },
-    });
-
-    var idx: u32 = 0;
+    try tree.nodes.append(undefined);
 
     while (true) {
-        switch (peek(tokens, &idx).kind) {
+        switch (tokens.peek().kind) {
             .eof => break,
             .@"fn" => {
-                const odx = idx;
-                try expect(tokens, &idx, .@"fn");
-                try expect(tokens, &idx, .identifier);
-                try expect(tokens, &idx, .@"(");
+                const odx = tokens.idx;
+                try tokens.expect(.@"fn");
+                try tokens.expect(.identifier);
+                try tokens.expect(.@"(");
 
                 var prms = ArrayList(u32).init(gpa);
                 defer prms.deinit();
 
-                while (true) switch (peek(tokens, &idx).kind) {
+                while (true) switch (tokens.peek().kind) {
                     .@")" => {
-                        skip(tokens, &idx);
+                        tokens.skip();
                         break;
                     },
                     else => {
-                        try expect(tokens, &idx, .identifier);
-                        try expect(tokens, &idx, .@":");
-                        const typ = try parseExpr(gpa, tokens, source, &tree, &idx, 0);
+                        try tokens.expect(.identifier);
+                        try tokens.expect(.@":");
+                        const typ = try parseExpr(gpa, tokens, source, &tree, 0);
                         const tnd = try tree.pushNode(typ);
                         try prms.append(tnd);
 
-                        switch (next(tokens, &idx).kind) {
+                        switch (tokens.next().kind) {
                             .@"," => {},
                             .@")" => break,
                             else => return error.UnexpectedToken,
@@ -284,26 +301,39 @@ pub fn parse(gpa: Allocator, tokens: []const Token, source: [:0]const u8) !Ast {
                     },
                 };
 
-                const rtyp = try parseExpr(gpa, tokens, source, &tree, &idx, 0);
-                const body = try parseExpr(gpa, tokens, source, &tree, &idx, 0);
-                try expect(tokens, &idx, .@";");
+                const rtyp = try parseExpr(gpa, tokens, source, &tree, 0);
+                const body = try parseExpr(gpa, tokens, source, &tree, 0);
+                try tokens.expect(.@";");
+
+                const qrms = try tree.pushNode(.{
+                    .main = odx + 2,
+                    .kind = .list,
+                    .extra = .{ .list = .{
+                        .idx = try tree.pushExtraList(prms.items),
+                        .len = @intCast(prms.items.len),
+                    }},
+                });
+
+                const proto = try tree.pushNode(.{
+                    .main = odx + 2,
+                    .kind = .fproto,
+                    .extra = .{ .fproto = .{
+                        .prms = qrms,
+                        .rtyp = try tree.pushNode(rtyp),
+                    }},
+                });
 
                 const bdx = try tree.pushNode(body);
-                const rdx = try tree.pushNode(rtyp);
-                _ = rdx;
-
-                const tdx = try tree.pushExtra(0); //NOTE, used to be table
-                const pdx = try tree.pushExtraList(prms.items); //TODO(parse), add new function pushExtraProto
-                _ = pdx;
 
                 const ndx = try tree.pushNode(.{
                     .main = odx,
-                    .kind = .fn_decl,
-                    .extra = .{
-                        .lhs = bdx,
-                        .rhs = tdx,
-                    },
+                    .kind = .fdecl,
+                    .extra = .{ .fdecl = .{
+                        .proto = proto,
+                        .body = bdx,
+                    }},
                 });
+
                 try roots.append(ndx);
             },
             //.@"let" => {
@@ -343,83 +373,78 @@ pub fn parse(gpa: Allocator, tokens: []const Token, source: [:0]const u8) !Ast {
         }
     }
 
-    const edx = try tree.pushExtraList(roots.items);
-    tree.nodes.items[0].kind = .root;
-    tree.nodes.items[0].extra.lhs = edx;
-    tree.nodes.items[0].extra.rhs = undefined;
-
+    tree.nodes.items[0] = .{
+        .main = @intCast(tokens.list.items.len-1),
+        .kind = .root,
+        .extra = .{ .list = .{
+            .idx = try tree.pushExtraList(roots.items),
+            .len = @intCast(roots.items.len),
+        }},
+    };
 
     return tree;
 }
 
 fn parseExpr(
     gpa: Allocator,
-    tokens: []const Token,
+    tokens: *Tokens,
     source: [:0]const u8,
     tree: *Ast,
-    idx: *u32,
     bp: u8,
 ) Error!Node {
-    const prelude = try parseExprPrelude(gpa, tokens, source, tree, idx) orelse return error.UnexpectedFirstToken;
-    return try parseExprBody(gpa, tokens, source, tree, prelude, idx, bp);
+    const prelude = try parseExprPrelude(gpa, tokens, source, tree) orelse return error.UnexpectedFirstToken;
+    return try parseExprBody(gpa, tokens, source, tree, prelude, bp);
 }
 
 fn parseExprPrelude(
     gpa: Allocator,
-    tokens: []const Token,
+    tokens: *Tokens,
     source: [:0]const u8,
     tree: *Ast,
-    idx: *u32,
 ) Error!?Node {
-    return switch (next(tokens, idx).kind) {
+    return switch (tokens.next().kind) {
         .integer => .{
-            .main = idx.* - 1,
+            .main = tokens.idx - 1,
             .kind = .integer,
-            .extra = undefined
+            .extra = .{ .none = {} }
         },
         .identifier => .{
-            .main = idx.* - 1,
+            .main = tokens.idx - 1,
             .kind = .identifier,
-            .extra = undefined
+            .extra = .{ .none = {} }
         },
         .@"&" => b: {
-            const odx = idx.* - 1;
+            const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.ref).?;
-            const rhs = try parseExpr(gpa, tokens, source, tree, idx, rbp);
+            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
             const rnd = try tree.pushNode(rhs);
 
             break :b .{
                 .main = odx,
                 .kind = .ref,
-                .extra = .{
-                    .lhs = rnd,
-                    .rhs = undefined,
-                },
+                .extra = .{ .mon_op = rnd },
             };
         },
         .@"*" => b: {
-            const odx = idx.* - 1;
+            const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.deref).?;
-            const rhs = try parseExpr(gpa, tokens, source, tree, idx, rbp);
+            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
             const rnd = try tree.pushNode(rhs);
 
             break :b .{
                 .main = odx,
                 .kind = .deref,
-                .extra = .{
-                    .lhs = rnd,
-                    .rhs = undefined,
-                },
+                .extra = .{ .mon_op = rnd },
             };
         },
         .@"{" => b: {
-            const odx = idx.* - 1;
+            const odx = tokens.idx - 1;
             var elems = ArrayList(u32).init(gpa);
             defer elems.deinit();
 
-            while (true) switch (peek(tokens, idx).kind) {
+            while (true) switch (tokens.peek().kind) {
                 .@"}" => {
-                    skip(tokens, idx);
+                    tokens.skip();
                     break;
                 },
                 //.@"let" => {
@@ -468,31 +493,29 @@ fn parseExprPrelude(
                 //    });
                 //},
                 else => {
-                    const rhs = try parseExpr(gpa, tokens, source, tree, idx, 0);
-                    try expect(tokens, idx, .@";");
+                    const rhs = try parseExpr(gpa, tokens, source, tree, 0);
+                    try tokens.expect(.@";");
 
                     const rnd = try tree.pushNode(rhs);
                     try elems.append(rnd);
                 },
             };
 
-            const edx = try tree.pushExtraList(elems.items);
-
             break :b .{
                 .main = odx,
                 .kind = .block,
-                .extra = .{
-                    .lhs = edx,
-                    .rhs = 0, //NOTE, used to be table
-                },
+                .extra = .{ .list = .{
+                    .idx = try tree.pushExtraList(elems.items),
+                    .len = @intCast(elems.items.len),
+                }},
             };
         },
         .@"return" => b: {
-            const odx = idx.* - 1;
+            const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.ret).?;
 
-            const rnd = if (try parseExprPrelude(gpa, tokens, source, tree, idx)) |pre| r: {
-                const rhs = try parseExprBody(gpa, tokens, source, tree, pre, idx, rbp);
+            const rnd = if (try parseExprPrelude(gpa, tokens, source, tree)) |pre| r: {
+                const rhs = try parseExprBody(gpa, tokens, source, tree, pre, rbp);
                 break :r try tree.pushNode(rhs);
             } else r: {
                 break :r 0;
@@ -501,32 +524,29 @@ fn parseExprPrelude(
             break :b .{
                 .main = odx,
                 .kind = .ret,
-                .extra = .{
-                    .lhs = rnd,
-                    .rhs = undefined,
-                },
+                .extra = .{ .mon_op = rnd },
             };
         },
         .@"struct" => b: {
-            const odx = idx.* - 1;
+            const odx = tokens.idx - 1;
             var members = ArrayList(u32).init(gpa);
             defer members.deinit();
 
-            try expect(tokens, idx, .@"{");
+            try tokens.expect(.@"{");
 
-            while (true) switch (peek(tokens, idx).kind) {
+            while (true) switch (tokens.peek().kind) {
                 .@"}" => {
-                    skip(tokens, idx);
+                    tokens.skip();
                     break;
                 },
                 else => {
-                    try expect(tokens, idx, .identifier);
-                    try expect(tokens, idx, .@":");
-                    const typ = try parseExpr(gpa, tokens, source, tree, idx, 0);
+                    try tokens.expect(.identifier);
+                    try tokens.expect(.@":");
+                    const typ = try parseExpr(gpa, tokens, source, tree, 0);
                     const tnd = try tree.pushNode(typ);
                     try members.append(tnd);
 
-                    switch (next(tokens, idx).kind) {
+                    switch (tokens.next().kind) {
                         .@"," => {},
                         .@"}" => break,
                         else => return error.UnexpectedToken,
@@ -534,23 +554,21 @@ fn parseExprPrelude(
                 },
             };
 
-            const mnd = try tree.pushExtraList(members.items);
-
             break :b .{
                 .main = odx,
                 .kind = .structdef,
-                .extra = .{
-                    .lhs = mnd,
-                    .rhs = undefined,
-                },
+                .extra = .{ .list = .{
+                    .idx = try tree.pushExtraList(members.items),
+                    .len = @intCast(members.items.len),
+                }},
             };
         },
         .@"if" => b: {
-            const odx = idx.* - 1;
-            const chs = try parseExpr(gpa, tokens, source, tree, idx, 0);
-            const lhs = try parseExpr(gpa, tokens, source, tree, idx, 0);
-            try expect(tokens, idx, .@"else");
-            const rhs = try parseExpr(gpa, tokens, source, tree, idx, 0);
+            const odx = tokens.idx - 1;
+            const chs = try parseExpr(gpa, tokens, source, tree, 0);
+            const lhs = try parseExpr(gpa, tokens, source, tree, 0);
+            try tokens.expect(.@"else");
+            const rhs = try parseExpr(gpa, tokens, source, tree, 0);
 
             const cnd = try tree.pushNode(chs);
             const lnd = try tree.pushNode(lhs);
@@ -560,14 +578,14 @@ fn parseExprPrelude(
             break :b .{
                 .main = odx,
                 .kind = .ternary,
-                .extra = .{
+                .extra = .{ .tri_op = .{
                     .lhs = cnd,
-                    .rhs = lnd,
-                },
+                    .mhs = lnd,
+                }},
             };
         },
         else => {
-            idx.* -= 1;
+            tokens.idx -= 1;
             return null;
         },
     };
@@ -576,18 +594,17 @@ fn parseExprPrelude(
 
 fn parseExprBody(
     gpa: Allocator,
-    tokens: []const Token,
+    tokens: *Tokens,
     source: [:0]const u8,
     tree: *Ast,
     pre: Node,
-    idx: *u32,
     bp: u8,
 ) Error!Node {
     var lhs = pre;
 
     while (true) {
-        const odx = idx.*;
-        const op: Op = switch (peek(tokens, idx).kind) {
+        const odx = tokens.idx;
+        const op: Op = switch (tokens.peek().kind) {
             .@"+" => .add,
             .@"-" => .sub,
             .@"*" => .mul,
@@ -598,23 +615,23 @@ fn parseExprBody(
             .@"(" => {
                 var args = ArrayList(u32).init(gpa);
                 defer args.deinit();
-                skip(tokens, idx);
+                tokens.skip();
 
-                while (true) switch (peek(tokens, idx).kind) {
+                while (true) switch (tokens.peek().kind) {
                     .@"," => {
-                        skip(tokens, idx);
+                        tokens.skip();
                         try args.append(0);
                     },
                     .@")" => {
-                        skip(tokens, idx);
+                        tokens.skip();
                         break;
                     },
                     else => {
-                        const arg = try parseExpr(gpa, tokens, source, tree, idx, 0);
+                        const arg = try parseExpr(gpa, tokens, source, tree, 0);
                         const gnd = try tree.pushNode(arg);
                         try args.append(gnd);
 
-                        switch (next(tokens, idx).kind) {
+                        switch (tokens.next().kind) {
                             .@"," => {},
                             .@")" => break,
                             else => return error.UnexpectedToken,
@@ -623,32 +640,37 @@ fn parseExprBody(
                 };
 
                 const lnd = try tree.pushNode(lhs);
-                const gnd = try tree.pushExtraList(args.items);
+
+                const list = try tree.pushNode(.{
+                    .main = odx,
+                    .kind = .list,
+                    .extra = .{ .list = .{
+                        .idx = try tree.pushExtraList(args.items),
+                        .len = @intCast(args.items.len),
+                    }},
+                });
 
                 lhs = .{
                     .main = odx,
-                    .kind = .fn_call,
-                    .extra = .{
-                        .lhs = lnd,
-                        .rhs = gnd,
-                    },
+                    .kind = .fcall,
+                    .extra = .{ .fcall = .{
+                        .func = lnd,
+                        .args = list,
+                    }},
                 };
 
                 continue;
             },
             .@"." => {
-                skip(tokens, idx);
-                try expect(tokens, idx, .identifier);
+                tokens.skip();
+                try tokens.expect(.identifier);
 
                 const lnd = try tree.pushNode(lhs);
 
                 lhs = .{
                     .main = odx,
                     .kind = .dot,
-                    .extra = .{
-                        .lhs = lnd,
-                        .rhs = undefined,
-                    },
+                    .extra = .{ .mon_op = lnd },
                 };
 
                 continue;
@@ -660,19 +682,19 @@ fn parseExprBody(
             if (p.lbp < bp)
                 break;
 
-            skip(tokens, idx);
+            tokens.skip();
 
             const lnd = try tree.pushNode(lhs);
-            const rhs = try parseExpr(gpa, tokens, source, tree, idx, p.rbp);
+            const rhs = try parseExpr(gpa, tokens, source, tree, p.rbp);
             const rnd = try tree.pushNode(rhs);
 
             lhs = .{
                 .main = odx,
                 .kind = op.kind(),
-                .extra = .{
+                .extra = .{ .bin_op = .{
                     .lhs = lnd,
                     .rhs = rnd,
-                },
+                }},
             };
 
             continue;

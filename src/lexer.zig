@@ -13,6 +13,44 @@ const State = enum {
     comment,
 };
 
+pub const Tokens = struct {
+    list: ArrayList(Token),
+    idx: u32 = 0,
+
+    pub fn deinit(self: Tokens) void {
+        self.list.deinit();
+    }
+
+    pub fn debug(self: Tokens, source: [:0]const u8) void {
+        for (self.list.items) |token|
+            std.debug.print("token.{s}: '{s}'\n", .{@tagName(token.kind), token.slice(source)});
+    }
+
+    pub fn at(self: Tokens, idx: u32) Token {
+        return self.list.items[idx];
+    }
+
+    pub fn peek(self: Tokens) Token {
+        return self.list.items[self.idx];
+    }
+
+    pub fn next(self: *Tokens) Token {
+        const token = self.peek();
+        self.idx += 1;
+        return token;
+    }
+
+    pub fn skip(self: *Tokens) void {
+        _ = self.next();
+    }
+
+    pub fn expect(self: *Tokens, kind: Token.Kind) !void {
+        if (self.peek().kind != kind)
+            return error.UnexpectedToken;
+        self.skip();
+    }
+};
+
 pub const Token = struct {
     kind: Kind,
     idx: u32,
@@ -74,7 +112,7 @@ pub const Token = struct {
     }
 };
 
-pub fn lex(gpa: Allocator, source: [:0]const u8) ![]Token {
+pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
     var tokens = ArrayList(Token).init(gpa);
 
     var idx: u32 = 0;
@@ -275,5 +313,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) ![]Token {
         },
     }
 
-    return tokens.toOwnedSlice();
+    return .{
+        .list = tokens,
+    };
 }
