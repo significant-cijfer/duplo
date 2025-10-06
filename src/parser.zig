@@ -64,6 +64,8 @@ pub const Ast = struct {
             .root => std.debug.print("root\n", .{}),
             .fcall => std.debug.print("fcall\n", .{}),
             .fproto => std.debug.print("fproto\n", .{}),
+            .block => std.debug.print("{{}}\n", .{}),
+            .list => std.debug.print("()\n", .{}),
             else => std.debug.print("{s}\n", .{tokens.at(node.main).slice(source)}),
         }
 

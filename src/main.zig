@@ -4,6 +4,10 @@ const cwd = std.fs.cwd;
 
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
+const Context = @import("context.zig");
+
+// Global TODOs:
+// TODO(main), add symbol table and type checking
 
 pub fn main() !void {
     var dbg = std.heap.DebugAllocator(.{}).init;
@@ -24,8 +28,11 @@ pub fn main() !void {
 
     tokens.debug(source);
 
-    const ast = try Parser.parse(gpa, &tokens, source);
-    defer ast.deinit();
+    const tree = try Parser.parse(gpa, &tokens, source);
+    defer tree.deinit();
 
-    ast.debug(tokens, source, 0, 0);
+    tree.debug(tokens, source, 0, 0);
+
+    var ctx = try Context.scan(gpa, tree);
+    defer ctx.deinit();
 }
