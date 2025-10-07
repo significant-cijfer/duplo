@@ -20,7 +20,7 @@ pub fn main() !void {
     const file = args.next() orelse @panic("Expected <file> arg");
     _ = exec;
 
-    const source = try cwd().readFileAllocOptions(gpa, file, std.math.maxInt(u32), null, @alignOf(u8), 0);
+    const source = try cwd().readFileAllocOptions(gpa, file, std.math.maxInt(u32), null, .of(u8), 0);
     defer gpa.free(source);
 
     var tokens = try Lexer.lex(gpa, source);
@@ -28,7 +28,7 @@ pub fn main() !void {
 
     tokens.debug(source);
 
-    const tree = try Parser.parse(gpa, &tokens, source);
+    var tree = try Parser.parse(gpa, &tokens, source);
     defer tree.deinit();
 
     tree.debug(tokens, source, 0, 0);

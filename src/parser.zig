@@ -17,29 +17,30 @@ const Error = error {
     || std.fmt.ParseIntError;
 
 pub const Ast = struct {
+    allocator: Allocator,
     nodes: ArrayList(Node),
     extra: ArrayList(u32),
 
-    pub fn deinit(self: Ast) void {
-        self.nodes.deinit();
-        self.extra.deinit();
+    pub fn deinit(self: *Ast) void {
+        self.nodes.deinit(self.allocator);
+        self.extra.deinit(self.allocator);
     }
 
     fn pushNode(self: *Ast, node: Node) !u32 {
         const idx = self.nodes.items.len;
-        try self.nodes.append(node);
+        try self.nodes.append(self.allocator, node);
         return @intCast(idx);
     }
 
     fn pushExtra(self: *Ast, node: u32) !u32 {
         const idx = self.extra.items.len;
-        try self.extra.append(node);
+        try self.extra.append(self.allocator, node);
         return @intCast(idx);
     }
 
     fn pushExtraList(self: *Ast, nodes: []u32) !u32 {
         const idx = self.extra.items.len;
-        try self.extra.appendSlice(nodes);
+        try self.extra.appendSlice(self.allocator, nodes);
         return @intCast(idx);
     }
 
@@ -262,14 +263,15 @@ const Op = enum {
 
 pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
     var tree = Ast{
-        .nodes = .init(gpa),
-        .extra = .init(gpa),
+        .allocator = gpa,
+        .nodes = .empty,
+        .extra = .empty,
     };
 
-    var roots = ArrayList(u32).init(gpa);
-    defer roots.deinit();
+    var roots = ArrayList(u32).empty;
+    defer roots.deinit(gpa);
 
-    try tree.nodes.append(undefined);
+    try tree.nodes.append(gpa, undefined);
 
     while (true) {
         switch (tokens.peek().kind) {
@@ -280,8 +282,8 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                 try tokens.expect(.identifier);
                 try tokens.expect(.@"(");
 
-                var prms = ArrayList(u32).init(gpa);
-                defer prms.deinit();
+                var prms = ArrayList(u32).empty;
+                defer prms.deinit(gpa);
 
                 while (true) switch (tokens.peek().kind) {
                     .@")" => {
@@ -293,7 +295,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                         try tokens.expect(.@":");
                         const typ = try parseExpr(gpa, tokens, source, &tree, 0);
                         const tnd = try tree.pushNode(typ);
-                        try prms.append(tnd);
+                        try prms.append(gpa, tnd);
 
                         switch (tokens.next().kind) {
                             .@"," => {},
@@ -336,7 +338,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                     }},
                 });
 
-                try roots.append(ndx);
+                try roots.append(gpa, ndx);
             },
             //.@"let" => {
             //    const table = 0;
@@ -441,8 +443,8 @@ fn parseExprPrelude(
         },
         .@"{" => b: {
             const odx = tokens.idx - 1;
-            var elems = ArrayList(u32).init(gpa);
-            defer elems.deinit();
+            var elems = ArrayList(u32).empty;
+            defer elems.deinit(gpa);
 
             while (true) switch (tokens.peek().kind) {
                 .@"}" => {
@@ -499,7 +501,7 @@ fn parseExprPrelude(
                     try tokens.expect(.@";");
 
                     const rnd = try tree.pushNode(rhs);
-                    try elems.append(rnd);
+                    try elems.append(gpa, rnd);
                 },
             };
 
@@ -531,8 +533,8 @@ fn parseExprPrelude(
         },
         .@"struct" => b: {
             const odx = tokens.idx - 1;
-            var members = ArrayList(u32).init(gpa);
-            defer members.deinit();
+            var members = ArrayList(u32).empty;
+            defer members.deinit(gpa);
 
             try tokens.expect(.@"{");
 
@@ -546,7 +548,7 @@ fn parseExprPrelude(
                     try tokens.expect(.@":");
                     const typ = try parseExpr(gpa, tokens, source, tree, 0);
                     const tnd = try tree.pushNode(typ);
-                    try members.append(tnd);
+                    try members.append(gpa, tnd);
 
                     switch (tokens.next().kind) {
                         .@"," => {},
@@ -615,14 +617,14 @@ fn parseExprBody(
             .@"and" => .logand,
             .@"or" => .logior,
             .@"(" => {
-                var args = ArrayList(u32).init(gpa);
-                defer args.deinit();
+                var args = ArrayList(u32).empty;
+                defer args.deinit(gpa);
                 tokens.skip();
 
                 while (true) switch (tokens.peek().kind) {
                     .@"," => {
                         tokens.skip();
-                        try args.append(0);
+                        try args.append(gpa, 0);
                     },
                     .@")" => {
                         tokens.skip();
@@ -631,7 +633,7 @@ fn parseExprBody(
                     else => {
                         const arg = try parseExpr(gpa, tokens, source, tree, 0);
                         const gnd = try tree.pushNode(arg);
-                        try args.append(gnd);
+                        try args.append(gpa, gnd);
 
                         switch (tokens.next().kind) {
                             .@"," => {},

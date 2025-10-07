@@ -14,11 +14,12 @@ const State = enum {
 };
 
 pub const Tokens = struct {
+    allocator: Allocator,
     list: ArrayList(Token),
     idx: u32 = 0,
 
-    pub fn deinit(self: Tokens) void {
-        self.list.deinit();
+    pub fn deinit(self: *Tokens) void {
+        self.list.deinit(self.allocator);
     }
 
     pub fn debug(self: Tokens, source: [:0]const u8) void {
@@ -113,7 +114,7 @@ pub const Token = struct {
 };
 
 pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
-    var tokens = ArrayList(Token).init(gpa);
+    var tokens = ArrayList(Token).empty;
 
     var idx: u32 = 0;
     state: switch (State.initial) {
@@ -123,7 +124,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             0 => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .eof,
                     .idx = idx,
                 });
@@ -131,7 +132,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 idx += 1;
             },
             '+' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"+",
                     .idx = idx,
                 });
@@ -140,7 +141,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '-' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"-",
                     .idx = idx,
                 });
@@ -149,7 +150,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '*' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"*",
                     .idx = idx,
                 });
@@ -162,7 +163,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                     continue :state .comment;
                 },
                 else => {
-                    try tokens.append(.{
+                    try tokens.append(gpa, .{
                         .kind = .@"/",
                         .idx = idx,
                     });
@@ -172,7 +173,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 },
             },
             '&' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"&",
                     .idx = idx,
                 });
@@ -181,7 +182,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '=' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"=",
                     .idx = idx,
                 });
@@ -190,7 +191,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '(' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"(",
                     .idx = idx,
                 });
@@ -199,7 +200,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             ')' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@")",
                     .idx = idx,
                 });
@@ -208,7 +209,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '{' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"{",
                     .idx = idx,
                 });
@@ -217,7 +218,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '}' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@"}",
                     .idx = idx,
                 });
@@ -226,7 +227,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             ':' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@":",
                     .idx = idx,
                 });
@@ -235,7 +236,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             ';' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@";",
                     .idx = idx,
                 });
@@ -244,7 +245,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             ',' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@",",
                     .idx = idx,
                 });
@@ -253,7 +254,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '.' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .@".",
                     .idx = idx,
                 });
@@ -262,7 +263,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .initial;
             },
             '0'...'9' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .integer,
                     .idx = idx,
                 });
@@ -271,7 +272,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 continue :state .integer;
             },
             'a'...'z', 'A'...'Z' => {
-                try tokens.append(.{
+                try tokens.append(gpa, .{
                     .kind = .identifier,
                     .idx = idx,
                 });
@@ -314,6 +315,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
     }
 
     return .{
+        .allocator = gpa,
         .list = tokens,
     };
 }

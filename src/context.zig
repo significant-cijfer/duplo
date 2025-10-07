@@ -70,7 +70,7 @@ pub const Context = struct {
 pub fn scan(gpa: Allocator, tree: Ast) !Context {
     var ctx = Context{
         .table = .init(gpa),
-        .types = .init(gpa),
+        .types = .empty,
     };
 
     const root = tree.nodes.items[0];
