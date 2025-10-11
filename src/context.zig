@@ -13,6 +13,8 @@ pub const Typx = struct {
     extra: Extra,
 
     const Kind = enum {
+        tx_void,
+        tx_noreturn,
         integer,
         function,
     };
@@ -29,12 +31,23 @@ pub const Typx = struct {
         const Function = struct {
         };
     };
+
+    const VOID = Typx{
+        .kind = .tx_void,
+        .extra = undefined,
+    };
+
+    const NORETURN = Typx{
+        .kind = .tx_noreturn,
+        .extra = undefined,
+    };
 };
 
 pub const Context = struct {
     allocator: Allocator,
     table: StringHashMap(Symbol),
     types: ArrayList(Typx),
+    frame: Frame,
 
     const Symbol = struct {
         scope: Scope,
@@ -47,8 +60,21 @@ pub const Context = struct {
         param,
     };
 
+    const Frame = struct {
+        return_type: u32 = 0,
+        break_type: u32 = 0,
+    };
+
     pub fn deinit(self: *Context) void {
         self.table.deinit(self.allocator);
+    }
+
+    fn clone(self: *Context) !Context {
+        return .{
+            .allocator = self.allocator,
+            .table = try self.table.clone(self.allocator),
+            .types = try self.types.clone(self.allocator),
+        };
     }
 
     fn pushTypx(self: *Context, typx: Typx) !u32 {
@@ -74,6 +100,34 @@ pub const Context = struct {
                     .extra = .{ .function = .{} },
                 });
             },
+            .block => {
+                const stmts = tree.extras(node.extra);
+
+                for (stmts, 0..) |stmt, jdx| {
+                    const sdx = try self.examine(tree, stmt);
+
+                    switch (self.types.items[sdx].kind) {
+                        .tx_noreturn => {
+                            if (jdx < stmts.len-1) @panic("early return detected in block");
+                            break;
+                        },
+                        else => {},
+                    }
+                }
+
+                return try self.pushTypx(.VOID);
+            },
+            .ret => {
+                //TODO(examine), check wether the return type is compatible
+                const rtype = if (node.extra.mon_op == 0)
+                    try self.pushTypx(.VOID)
+                else
+                    try self.examine(tree, node.extra.mon_op);
+
+                _ = rtype;
+
+                return try self.pushTypx(.NORETURN);
+            },
             else => panic("Unhandled examination: {}", .{node.kind}),
         }
     }
@@ -84,7 +138,11 @@ pub fn scan(gpa: Allocator, tree: Ast) !Context {
         .allocator = gpa,
         .table = .empty,
         .types = .empty,
+        .frame = .{},
     };
+
+    //NOTE, prevent idx 0, from being correct, thus preserving that spot as a NULL ref
+    _ = try ctx.pushTypx(undefined);
 
     const root = tree.nodes.items[0];
     const roots = tree.extras(root.extra);
