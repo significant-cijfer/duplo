@@ -7,7 +7,7 @@ const Parser = @import("parser.zig");
 const Context = @import("context.zig");
 
 // Global TODOs:
-// TODO(main), add symbol table and type checking
+// TODO(main), globalize error handling
 
 pub fn main() !void {
     var dbg = std.heap.DebugAllocator(.{}).init;
@@ -33,6 +33,6 @@ pub fn main() !void {
 
     tree.debug(tokens, source, 0, 0);
 
-    var ctx = try Context.scan(gpa, tree);
+    var ctx = try Context.scan(gpa, tree, &tokens, source);
     defer ctx.deinit();
 }
