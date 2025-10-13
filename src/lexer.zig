@@ -1,10 +1,13 @@
 const std = @import("std");
-const panic = std.debug.panic;
 const stringToEnum = std.meta.stringToEnum;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StaticStringMap = std.StaticStringMap;
+
+const Parser = @import("parser.zig");
+
+pub var error_idx: ?u32 = null;
 
 const State = enum {
     initial,
@@ -32,6 +35,7 @@ pub const Tokens = struct {
     }
 
     pub fn peek(self: Tokens) Token {
+        Parser.error_idx = self.idx; //NOTE, might not be the correct place to put this
         return self.list.items[self.idx];
     }
 
@@ -117,6 +121,8 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
     var tokens = ArrayList(Token).empty;
 
     var idx: u32 = 0;
+    defer error_idx = idx;
+
     state: switch (State.initial) {
         .initial => switch (source[idx]) {
             '\n', '\r', '\t', ' ' => {
@@ -280,7 +286,7 @@ pub fn lex(gpa: Allocator, source: [:0]const u8) !Tokens {
                 idx += 1;
                 continue :state .identifier;
             },
-            else => |c| panic("Unexpected char: '{c}'\n", .{c}),
+            else => return error.UnexpectedChar,
         },
         .integer => sub: switch (source[idx]) {
             '0'...'9' => {

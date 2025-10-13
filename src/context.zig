@@ -12,6 +12,8 @@ const Parser = @import("parser.zig");
 const Ast = Parser.Ast;
 const Node = Parser.Node;
 
+pub var error_idx: ?u32 = null;
+
 pub const Typx = struct {
     kind: Kind,
     extra: Extra,
@@ -207,6 +209,8 @@ pub const Context = struct {
 
     fn examine(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) !u32 {
         const node = tree.nodes.items[idx];
+
+        errdefer { if (error_idx == null) error_idx = idx; }
 
         switch (node.kind) {
             .fdecl => {

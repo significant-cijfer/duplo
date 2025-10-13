@@ -9,12 +9,13 @@ const Lexer = @import("lexer.zig");
 const Tokens = Lexer.Tokens;
 const Token = Lexer.Token;
 
+pub var error_idx: ?u32 = null;
+
 const Error = error {
     UnexpectedToken,
     UnexpectedFirstToken,
 }
-    || Allocator.Error
-    || std.fmt.ParseIntError;
+    || Allocator.Error;
 
 pub const Ast = struct {
     allocator: Allocator,
