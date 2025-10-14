@@ -86,7 +86,7 @@ pub const Token = struct {
         @"if",
         @"else",
         @"let",
-        @"mut",
+        @"var",
     };
 
     pub fn slice(self: Token, source: [:0]const u8) []const u8 {

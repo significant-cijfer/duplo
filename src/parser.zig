@@ -100,6 +100,14 @@ pub const Ast = struct {
                     self.debug(tokens, source, mmbr, depth+1);
                 }
             },
+            .vardef => {
+                for (0..depth+1) |_|
+                    std.debug.print("  ", .{});
+
+                std.debug.print("{s}\n", .{tokens.at(node.main+1).slice(source)});
+                self.debug(tokens, source, node.extra.bin_op.lhs, depth+2);
+                self.debug(tokens, source, node.extra.bin_op.rhs, depth+2);
+            },
             .block,
             .list => {
                 const stmts = self.extras(node.extra);
@@ -150,6 +158,7 @@ const Node = struct {
         integer, //none
         identifier, //none
         structdef, //list
+        vardef, //bo
         block, //list
         list, //list
         add, //bo
@@ -341,39 +350,32 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
 
                 try roots.append(gpa, ndx);
             },
-            //.@"let" => {
-            //    const table = 0;
-            //    const power = Op.infixPower(.assign).?;
+            .@"let" => {
+                const power = Op.infixPower(.assign).?;
 
-            //    const ldx = idx;
-            //    try expect(tokens, &idx, .@"let");
-            //    try expect(tokens, &idx, .identifier);
-            //    try expect(tokens, &idx, .@":");
-            //    const typ = try parseExpr(gpa, tokens, source, &idx, &nodes, &extra, power.rbp);
-            //    try expect(tokens, &idx, .@"=");
-            //    const expr = try parseExpr(gpa, tokens, source, &idx, &nodes, &extra, 0);
-            //    try expect(tokens, &idx, .@";");
+                const odx = tokens.idx;
+                try tokens.expect(.@"let");
+                try tokens.expect(.identifier);
+                try tokens.expect(.@":");
+                const typx = try parseExpr(gpa, tokens, source, &tree, power.rbp);
+                try tokens.expect(.@"=");
+                const expr = try parseExpr(gpa, tokens, source, &tree, 0);
+                try tokens.expect(.@";");
 
-            //    _ = ldx;
+                const tdx = try tree.pushNode(typx);
+                const edx = try tree.pushNode(expr);
 
-            //    const tdx = try pushNode(&nodes, typ);
-            //    const edx = try pushNode(&nodes, expr);
+                const ndx = try tree.pushNode(.{
+                    .main = odx,
+                    .kind = .vardef,
+                    .extra = .{ .bin_op = .{
+                        .lhs = tdx,
+                        .rhs = edx,
+                    }},
+                });
 
-            //    const tree = Ast{
-            //        .nodes = nodes.items,
-            //        .extra = extra.items,
-            //    };
-
-            //    const name = tokens[typ.main-2].slice(source);
-            //    const tv = try tree.eval(tokens, source, tables, null, .Type, table, tdx);
-            //    const ev = try tree.eval(tokens, source, tables, name, tv.typ, table, edx);
-
-            //    try tables.put(table, name, .{
-            //        .storage = .public,
-            //        .value = ev,
-            //        .typ = tv.typ
-            //    });
-            //},
+                try roots.append(gpa, ndx);
+            },
             else => return error.UnexpectedToken,
         }
     }
