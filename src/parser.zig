@@ -1,5 +1,4 @@
 const std = @import("std");
-const panic = std.debug.panic;
 const reverse = std.mem.reverse;
 
 const Allocator = std.mem.Allocator;
@@ -12,6 +11,7 @@ const Token = Lexer.Token;
 pub var error_idx: ?u32 = null;
 
 const Error = error {
+    UnexpectedOp,
     UnexpectedToken,
     UnexpectedFirstToken,
 }
@@ -707,7 +707,7 @@ fn parseExprBody(
             continue;
         }
 
-        panic("Unhandled op: {}", .{op});
+        return error.UnexpectedOp;
     }
 
     return lhs;

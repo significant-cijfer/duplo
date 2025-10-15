@@ -1,5 +1,4 @@
 const std = @import("std");
-const panic = std.debug.panic;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -263,7 +262,7 @@ pub const Context = struct {
             },
             .identifier => {
                 const slice = tokens.at(node.main).slice(source);
-                const symbol = self.table.get(slice) orelse panic("Unrecognized identifier: \x1B[31m{s}\x1B[0m", .{slice});
+                const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
                 return symbol.typx;
             },
             .block => {
@@ -274,7 +273,7 @@ pub const Context = struct {
 
                     switch (self.types.items[sdx].kind) {
                         .tx_noreturn => {
-                            if (jdx < stmts.len-1) @panic("early return detected in block");
+                            if (jdx < stmts.len-1) return error.FrameEarlyReturn;
                             break;
                         },
                         else => {},
@@ -312,7 +311,7 @@ pub const Context = struct {
 
                 return try self.pushTypx(.NORETURN);
             },
-            else => panic("Unhandled examination: {}", .{node.kind}),
+            else => return error.UnhandledExamination,
         }
     }
 };
