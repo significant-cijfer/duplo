@@ -1,5 +1,6 @@
-let x: type = struct {
-};
+let x: type = i32;
+
+let y: x = 1;
 
 fn main() i32 {
     return 1 + 2;

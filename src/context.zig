@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const parseInt = std.fmt.parseInt;
+
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMapUnmanaged;
@@ -23,6 +25,7 @@ pub const Typx = struct {
         tx_noreturn,
         integer,
         ct_integer,
+        tx_struct,
         function,
 
         fn supportsArith(self: Kind) bool {
@@ -34,8 +37,10 @@ pub const Typx = struct {
     };
 
     const Extra = union {
+        none: void,
         tx_type: Type,
         integer: Integer,
+        tx_struct: Struct,
         function: Function,
 
         const Type = u32;
@@ -43,6 +48,12 @@ pub const Typx = struct {
         const Integer = struct {
             sign: bool,
             bits: u16,
+        };
+
+        const Struct = struct {
+            fields: u32,
+            names: u32,
+            len: u32,
         };
 
         const Function = struct {
@@ -68,16 +79,34 @@ pub const Typx = struct {
     };
 };
 
+//TODO, get this shi into every .init assignment
+const Init = struct {
+    kind: Kind,
+    extra: Extra,
+
+    const Kind = enum {
+        tx_type,
+        integer,
+    };
+
+    const Extra = union {
+        tx_type: u32,
+        integer: i128,
+    };
+};
+
 pub const Context = struct {
     allocator: Allocator,
     table: StringHashMap(Symbol),
     types: ArrayList(Typx),
+    inits: ArrayList(Init),
     extra: ArrayList(u32),
     frame: Frame,
 
     const Symbol = struct {
         scope: Scope,
         typx: u32,
+        init: u32,
     };
 
     const Scope = enum {
@@ -96,16 +125,22 @@ pub const Context = struct {
             .allocator = gpa,
             .table = .empty,
             .types = .empty,
+            .inits = .empty,
             .extra = .empty,
             .frame = .{},
         };
 
         //NOTE, prevent idx 0, from being correct, thus preserving that spot as a NULL ref
-        _ = try ctx.pushTypx(undefined);
+        _ = try ctx.pushTypx(.VOID);
+        _ = try ctx.pushInit(undefined);
 
         try ctx.put("i32", .{
             .scope = .global,
             .typx = try ctx.pushTypx(.{
+                .kind = .tx_type,
+                .extra = .{ .none = undefined },
+            }),
+            .init = try ctx.pushInit(.{
                 .kind = .tx_type,
                 .extra = .{ .tx_type = try ctx.pushTypx(.{
                     .kind = .integer,
@@ -113,7 +148,22 @@ pub const Context = struct {
                         .sign = true,
                         .bits = 32,
                     }},
-                }) },
+                })},
+            }),
+        });
+
+        try ctx.put("type", .{
+            .scope = .global,
+            .typx = try ctx.pushTypx(.{
+                .kind = .tx_type,
+                .extra = .{ .none = undefined },
+            }),
+            .init = try ctx.pushInit(.{
+                .kind = .tx_type,
+                .extra = .{ .tx_type = try ctx.pushTypx(.{
+                    .kind = .tx_type,
+                    .extra = .{ .none = undefined },
+                })},
             }),
         });
 
@@ -129,9 +179,14 @@ pub const Context = struct {
             .allocator = self.allocator,
             .table = try self.table.clone(self.allocator),
             .types = try self.types.clone(self.allocator),
+            .inits = try self.inits.clone(self.allocator),
             .extra = try self.extra.clone(self.allocator),
             .frame = self.frame,
         };
+    }
+
+    fn scope(self: *const Context) Scope {
+        return if (self.frame.return_type == 0) .global else .local;
     }
 
     fn put(self: *Context, key: []const u8, value: Symbol) !void {
@@ -154,6 +209,11 @@ pub const Context = struct {
         return @intCast(idx);
     }
 
+    fn pushInit(self: *Context, innit: Init) !u32 {
+        const idx = self.inits.items.len;
+        try self.inits.append(self.allocator, innit);
+        return @intCast(idx);
+    }
 
     //NOTE, rhs has to "transform" into lhs
     fn castable(self: *const Context, lhs: u32, rhs: u32) bool {
@@ -182,6 +242,25 @@ pub const Context = struct {
             .ct_integer => switch (ltyp.kind) {
                 .integer => true,
                 .ct_integer => true,
+                else => false,
+            },
+            .tx_struct => switch (ltyp.kind) {
+                .tx_struct => {
+                    const lfields = ltyp.extra.tx_struct.fields;
+                    const llen = ltyp.extra.tx_struct.len;
+
+                    const rfields = ltyp.extra.tx_struct.fields;
+                    const rlen = ltyp.extra.tx_struct.len;
+
+                    if (llen != rlen)
+                        return false;
+
+                    for (self.extra.items[lfields..lfields+llen], self.extra.items[rfields..rfields+rlen]) |lfield, rfield|
+                        if (!self.castable(lfield, rfield))
+                            return false;
+
+                    return true;
+                },
                 else => false,
             },
             .function => switch (ltyp.kind) {
@@ -219,14 +298,13 @@ pub const Context = struct {
                 var ctx = try self.clone();
                 defer ctx.deinit();
 
-                const prot = ctx.types.items[proto].extra.function.rtyp;
-                const rtyp = ctx.types.items[prot].extra.tx_type;
-
-                ctx.frame.return_type = rtyp;
+                const rtype = ctx.types.items[proto].extra.function.rtyp;
+                ctx.frame.return_type = rtype;
 
                 try ctx.put(slice, .{
                     .scope = .global,
                     .typx = proto,
+                    .init = 0,
                 });
 
                 const body = try ctx.examine(tree, tokens, source, node.extra.fdecl.body);
@@ -246,14 +324,15 @@ pub const Context = struct {
                     );
                 }
 
-                const rtyp = try self.examine(tree, tokens, source, node.extra.fproto.rtyp);
+                const rinit = try self.eval(tree, tokens, source, node.extra.fproto.rtyp);
+                const rtype = self.inits.items[rinit].extra.tx_type;
 
                 return try self.pushTypx(.{
                     .kind = .function,
                     .extra = .{ .function = .{
                         .prms = try self.pushExtraList(prms.items),
                         .plen = @intCast(prms.items.len),
-                        .rtyp = rtyp,
+                        .rtyp = rtype,
                     } },
                 });
             },
@@ -264,6 +343,51 @@ pub const Context = struct {
                 const slice = tokens.at(node.main).slice(source);
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
                 return symbol.typx;
+            },
+            .structdef => {
+                var fields = ArrayList(u32).empty;
+                defer fields.deinit(self.allocator);
+
+                var names = ArrayList(u32).empty;
+                defer names.deinit(self.allocator);
+
+                const mmbrs = tree.extras(node.extra);
+
+                for (mmbrs) |mmbr| {
+                    try fields.append(
+                        self.allocator,
+                        try self.examine(tree, tokens, source, mmbr)
+                    );
+
+                    try names.append(
+                        self.allocator,
+                        tree.nodes.items[mmbr].main - 2,
+                    );
+                }
+
+                return try self.pushTypx(.{
+                    .kind = .tx_struct,
+                    .extra = .{ .tx_struct = .{
+                        .fields = try self.pushExtraList(fields.items),
+                        .names = try self.pushExtraList(names.items),
+                        .len = @intCast(fields.items.len),
+                    }},
+                });
+            },
+            .vardef => {
+                const lhs = try self.eval(tree, tokens, source, node.extra.bin_op.lhs);
+                const rhs = try self.eval(tree, tokens, source, node.extra.bin_op.rhs);
+
+                const name = tokens.at(node.main+1).slice(source);
+                const typx = self.inits.items[lhs].extra.tx_type;
+
+                try self.put(name, .{
+                    .scope = self.scope(),
+                    .typx = typx,
+                    .init = rhs,
+                });
+
+                return typx;
             },
             .block => {
                 const stmts = tree.extras(node.extra);
@@ -312,6 +436,30 @@ pub const Context = struct {
                 return try self.pushTypx(.NORETURN);
             },
             else => return error.UnhandledExamination,
+        }
+    }
+
+
+    fn eval(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) !u32 {
+        const node = tree.nodes.items[idx];
+
+        errdefer { if (error_idx == null) error_idx = idx; }
+
+        switch (node.kind) {
+            .integer => {
+                const slice = tokens.at(node.main).slice(source);
+
+                return try self.pushInit(.{
+                    .kind = .integer,
+                    .extra = .{ .integer = try parseInt(i128, slice, 0) },
+                });
+            },
+            .identifier => {
+                const slice = tokens.at(node.main).slice(source);
+                const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
+                return if (symbol.init != 0) symbol.init else error.NonComptimeEval;
+            },
+            else => return error.UnhandledEval,
         }
     }
 };
