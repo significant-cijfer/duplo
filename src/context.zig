@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const eql = std.mem.eql;
 const parseInt = std.fmt.parseInt;
 
 const Allocator = std.mem.Allocator;
@@ -107,11 +108,19 @@ const Init = struct {
     const Kind = enum {
         tx_type,
         integer,
+        structlit,
     };
 
     const Extra = union {
         tx_type: u32,
         integer: i128,
+        structlit: StructLit,
+
+        const StructLit = struct {
+            names: u32,
+            inits: u32,
+            len: u32,
+        };
     };
 };
 
@@ -275,6 +284,7 @@ pub const Context = struct {
                     if (llen != rlen)
                         return false;
 
+                    //TODO(castable), check fields based on names, not order
                     for (self.extra.items[lfields..lfields+llen], self.extra.items[rfields..rfields+rlen]) |lfield, rfield|
                         if (!self.castable(lfield, rfield))
                             return false;
@@ -376,6 +386,14 @@ pub const Context = struct {
             },
             .structdef => {
                 return try self.pushTypx(.TYPE);
+            },
+            .structlit => {
+                const head = try self.eval(tree, tokens, source, node.extra.structlit.head);
+                const hext = self.inits.items[head].extra.tx_type;
+
+                //TODO(structlit), add type checking against head
+
+                return hext;
             },
             .vardef => {
                 const lhs = try self.eval(tree, tokens, source, node.extra.bin_op.lhs);
@@ -499,6 +517,37 @@ pub const Context = struct {
                 return try self.pushInit(.{
                     .kind = .tx_type,
                     .extra = .{ .tx_type = typx },
+                });
+            },
+            .structlit => {
+                var names = ArrayList(u32).empty;
+                defer names.deinit(self.allocator);
+
+                var inits = ArrayList(u32).empty;
+                defer inits.deinit(self.allocator);
+
+                const defs = tree.nodes.items[node.extra.structlit.defs];
+                const mmbrs = tree.extras(defs.extra);
+
+                for (mmbrs) |mmbr| {
+                    try names.append(
+                        self.allocator,
+                        tree.nodes.items[mmbr].main - 2,
+                    );
+
+                    try inits.append(
+                        self.allocator,
+                        try self.eval(tree, tokens, source, mmbr)
+                    );
+                }
+
+                return try self.pushInit(.{
+                    .kind = .structlit,
+                    .extra = .{ .structlit = .{
+                        .names = try self.pushExtraList(names.items),
+                        .inits = try self.pushExtraList(inits.items),
+                        .len = @intCast(inits.items.len),
+                    }},
                 });
             },
             else => return error.UnhandledEval,

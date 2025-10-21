@@ -100,6 +100,10 @@ pub const Ast = struct {
                     self.debug(tokens, source, mmbr, depth+1);
                 }
             },
+            .structlit => {
+                self.debug(tokens, source, node.extra.structlit.head, depth+1);
+                self.debug(tokens, source, node.extra.structlit.defs, depth+1);
+            },
             .vardef => {
                 for (0..depth+1) |_|
                     std.debug.print("  ", .{});
@@ -158,6 +162,7 @@ const Node = struct {
         integer, //none
         identifier, //none
         structdef, //list
+        structlit, //structlit
         vardef, //bo
         block, //list
         list, //list
@@ -184,6 +189,7 @@ const Node = struct {
         fdecl: FnDecl,
         fcall: FnCall,
         fproto: FnProto,
+        structlit: StructLit,
 
         const List = struct {
             idx: u32,
@@ -215,6 +221,11 @@ const Node = struct {
         const FnProto = struct {
             prms: u32,
             rtyp: u32,
+        };
+
+        const StructLit = struct {
+            head: u32,
+            defs: u32,
         };
     };
 };
@@ -316,6 +327,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                 };
 
                 const rtyp = try parseExpr(gpa, tokens, source, &tree, 0);
+                try tokens.expect(.@",");
                 const body = try parseExpr(gpa, tokens, source, &tree, 0);
                 try tokens.expect(.@";");
 
@@ -663,6 +675,54 @@ fn parseExprBody(
                     .extra = .{ .fcall = .{
                         .func = lnd,
                         .args = list,
+                    }},
+                };
+
+                continue;
+            },
+            .@"{" => {
+                var defs = ArrayList(u32).empty;
+                defer defs.deinit(gpa);
+                tokens.skip();
+
+                while (true) switch (tokens.peek().kind) {
+                    .@"}" => {
+                        tokens.skip();
+                        break;
+                    },
+                    else => {
+                        try tokens.expect(.@".");
+                        try tokens.expect(.identifier);
+                        try tokens.expect(.@"=");
+                        const def = try parseExpr(gpa, tokens, source, tree, 0);
+                        const dnd = try tree.pushNode(def);
+                        try defs.append(gpa, dnd);
+
+                        switch (tokens.next().kind) {
+                            .@"," => {},
+                            .@"}" => break,
+                            else => return error.UnexpectedToken,
+                        }
+                    },
+                };
+
+                const lnd = try tree.pushNode(lhs);
+
+                const list = try tree.pushNode(.{
+                    .main = odx,
+                    .kind = .list,
+                    .extra = .{ .list = .{
+                        .idx = try tree.pushExtraList(defs.items),
+                        .len = @intCast(defs.items.len),
+                    }},
+                });
+
+                lhs = .{
+                    .main = odx,
+                    .kind = .structlit,
+                    .extra = .{ .structlit = .{
+                        .head = lnd,
+                        .defs = list,
                     }},
                 };
 
