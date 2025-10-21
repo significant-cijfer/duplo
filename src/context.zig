@@ -379,15 +379,19 @@ pub const Context = struct {
                 const rhs = try self.eval(tree, tokens, source, node.extra.bin_op.rhs);
 
                 const name = tokens.at(node.main+1).slice(source);
-                const typx = self.inits.items[lhs].extra.tx_type;
+                const ltypx = self.inits.items[lhs].extra.tx_type;
+                const rtypx = try self.examine(tree, tokens, source, node.extra.bin_op.rhs);
+
+                if (!self.castable(ltypx, rtypx))
+                    return error.FrameUncastableDef;
 
                 try self.put(name, .{
                     .scope = self.scope(),
-                    .typx = typx,
+                    .typx = ltypx,
                     .init = rhs,
                 });
 
-                return typx;
+                return ltypx;
             },
             .block => {
                 const stmts = tree.extras(node.extra);
