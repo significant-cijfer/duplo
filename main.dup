@@ -1,4 +1,7 @@
-let x: type = i32;
+let x: type = struct {
+    a: i32,
+    b: i32
+};
 
 let y: i32 = 1;
 

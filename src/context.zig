@@ -15,6 +15,21 @@ const Node = Parser.Node;
 
 pub var error_idx: ?u32 = null;
 
+const Error = error {
+    UnrecognizedIdentifier,
+    UnhandledExamination,
+    FrameUncastableReturn,
+    FrameUncastableDef,
+    FrameEarlyReturn,
+    FrameNonReturn,
+    ArithNonCastable,
+    ArithNonInteger,
+    NonComptimeEval,
+    UnhandledEval,
+}
+    || std.fmt.ParseIntError
+    || Allocator.Error;
+
 pub const Typx = struct {
     kind: Kind,
     extra: Extra,
@@ -65,17 +80,22 @@ pub const Typx = struct {
 
     const VOID = Typx{
         .kind = .tx_void,
-        .extra = undefined,
+        .extra = .{ .none = undefined },
+    };
+
+    const TYPE = Typx{
+        .kind = .tx_type,
+        .extra = .{ .none = undefined },
     };
 
     const NORETURN = Typx{
         .kind = .tx_noreturn,
-        .extra = undefined,
+        .extra = .{ .none = undefined },
     };
 
     const INTEGER = Typx{
         .kind = .ct_integer,
-        .extra = undefined,
+        .extra = .{ .none = undefined },
     };
 };
 
@@ -285,12 +305,22 @@ pub const Context = struct {
         };
     }
 
-    fn examine(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) !u32 {
+    fn examine(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
 
         switch (node.kind) {
+            .root => {
+                const roots = tree.extras(node.extra);
+
+                for (roots) |root| {
+                    const sdx = try self.examine(tree, tokens, source, root);
+                    _ = sdx;
+                }
+
+                return try self.pushTypx(.VOID);
+            },
             .fdecl => {
                 const proto = try self.examine(tree, tokens, source, node.extra.fdecl.proto);
                 const slice = tokens.at(node.main+1).slice(source);
@@ -345,34 +375,7 @@ pub const Context = struct {
                 return symbol.typx;
             },
             .structdef => {
-                var fields = ArrayList(u32).empty;
-                defer fields.deinit(self.allocator);
-
-                var names = ArrayList(u32).empty;
-                defer names.deinit(self.allocator);
-
-                const mmbrs = tree.extras(node.extra);
-
-                for (mmbrs) |mmbr| {
-                    try fields.append(
-                        self.allocator,
-                        try self.examine(tree, tokens, source, mmbr)
-                    );
-
-                    try names.append(
-                        self.allocator,
-                        tree.nodes.items[mmbr].main - 2,
-                    );
-                }
-
-                return try self.pushTypx(.{
-                    .kind = .tx_struct,
-                    .extra = .{ .tx_struct = .{
-                        .fields = try self.pushExtraList(fields.items),
-                        .names = try self.pushExtraList(names.items),
-                        .len = @intCast(fields.items.len),
-                    }},
-                });
+                return try self.pushTypx(.TYPE);
             },
             .vardef => {
                 const lhs = try self.eval(tree, tokens, source, node.extra.bin_op.lhs);
@@ -444,7 +447,7 @@ pub const Context = struct {
     }
 
 
-    fn eval(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) !u32 {
+    fn eval(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -463,6 +466,41 @@ pub const Context = struct {
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
                 return if (symbol.init != 0) symbol.init else error.NonComptimeEval;
             },
+            .structdef => {
+                var fields = ArrayList(u32).empty;
+                defer fields.deinit(self.allocator);
+
+                var names = ArrayList(u32).empty;
+                defer names.deinit(self.allocator);
+
+                const mmbrs = tree.extras(node.extra);
+
+                for (mmbrs) |mmbr| {
+                    try fields.append(
+                        self.allocator,
+                        try self.eval(tree, tokens, source, mmbr)
+                    );
+
+                    try names.append(
+                        self.allocator,
+                        tree.nodes.items[mmbr].main - 2,
+                    );
+                }
+
+                const typx = try self.pushTypx(.{
+                    .kind = .tx_struct,
+                    .extra = .{ .tx_struct = .{
+                        .fields = try self.pushExtraList(fields.items),
+                        .names = try self.pushExtraList(names.items),
+                        .len = @intCast(fields.items.len),
+                    }},
+                });
+
+                return try self.pushInit(.{
+                    .kind = .tx_type,
+                    .extra = .{ .tx_type = typx },
+                });
+            },
             else => return error.UnhandledEval,
         }
     }
@@ -471,13 +509,7 @@ pub const Context = struct {
 pub fn scan(gpa: Allocator, tree: Ast, tokens: *Tokens, source: [:0]const u8) !Context {
     var ctx = try Context.init(gpa);
 
-    const root = tree.nodes.items[0];
-    const roots = tree.extras(root.extra);
-
-    for (roots) |ndx| {
-        const tdx = try ctx.examine(tree, tokens, source, ndx);
-        _ = tdx;
-    }
+    _ = try ctx.examine(tree, tokens, source, 0);
 
     return ctx;
 }
