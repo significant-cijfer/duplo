@@ -24,11 +24,14 @@ const Error = error {
     NonCastableStructLit,
     UnrecognizedIdentifier,
     UnhandledExamination,
+    FrameNonDestroyedLinearInstance,
+    FrameUndestroyableInstance,
     FrameRootLinearDef,
     FrameUncastableReturn,
     FrameUncastableDef,
     FrameEarlyReturn,
     FrameNonReturn,
+    FrameNonDestroy,
     ArithNonCastable,
     ArithNonInteger,
     NonComptimeEval,
@@ -482,18 +485,27 @@ pub const Context = struct {
                 return ltypx;
             },
             .block => {
+                var ctx = try self.clone();
+                defer ctx.deinit();
+
                 const stmts = tree.extras(node.extra);
 
                 for (stmts, 0..) |stmt, jdx| {
-                    const sdx = try self.examine(tree, tokens, source, stmt);
+                    const sdx = try ctx.examine(tree, tokens, source, stmt);
 
-                    switch (self.types.items[sdx].kind) {
+                    switch (ctx.types.items[sdx].kind) {
                         .tx_noreturn => {
                             if (jdx < stmts.len-1) return error.FrameEarlyReturn;
                             break;
                         },
                         else => {},
                     }
+                }
+
+                var symbols = ctx.table.iterator();
+                while (symbols.next()) |symbol| {
+                    if (!self.table.contains(symbol.key_ptr.*) and ctx.isLinear(symbol.value_ptr.typx) and symbol.value_ptr.status == .alive)
+                        return error.FrameNonDestroyedLinearInstance;
                 }
 
                 return try self.pushTypx(.VOID);
@@ -512,6 +524,17 @@ pub const Context = struct {
                     return error.ArithNonCastable;
 
                 return lhs;
+            },
+            .destroy => {
+                const rtype = try self.examine(tree, tokens, source, node.extra.mon_op);
+
+                if (self.frame.return_type == 0)
+                    return error.FrameNonDestroy;
+
+                if (!self.isLinear(rtype))
+                    return error.FrameUndestroyableInstance;
+
+                return try self.pushTypx(.VOID);
             },
             .ret => {
                 const rtype = if (node.extra.mon_op == 0)

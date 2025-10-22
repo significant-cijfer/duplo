@@ -142,6 +142,9 @@ pub const Ast = struct {
                 self.debug(tokens, source, node.extra.tri_op.mhs, depth+1);
                 self.debug(tokens, source, node.extra.tri_op.mhs+1, depth+1);
             },
+            .destroy => {
+                self.debug(tokens, source, node.extra.mon_op, depth+1);
+            },
             .ret => if (node.extra.mon_op != 0) {
                 self.debug(tokens, source, node.extra.mon_op, depth+1);
             },
@@ -177,6 +180,7 @@ const Node = struct {
         logand, //bo
         logior, //bo
         ternary, //to
+        destroy, //mo
         ret, //mo
     };
 
@@ -240,6 +244,7 @@ const Op = enum {
     assign,
     logand,
     logior,
+    destroy,
     ret,
 
     const Power = struct {
@@ -258,6 +263,7 @@ const Op = enum {
             .assign => .assign,
             .logand => .logand,
             .logior => .logior,
+            .destroy => .destroy,
             .ret => .ret,
         };
     }
@@ -266,6 +272,7 @@ const Op = enum {
         return switch (self) {
             .ref,
             .deref => 10,
+            .destroy,
             .ret => 1,
             else => null,
         };
@@ -508,6 +515,19 @@ fn parseExprPrelude(
                     .idx = try tree.pushExtraList(elems.items),
                     .len = @intCast(elems.items.len),
                 }},
+            };
+        },
+        .@"destroy" => b: {
+            const odx = tokens.idx - 1;
+            const rbp = Op.prefixPower(.destroy).?;
+
+            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
+            const rnd = try tree.pushNode(rhs);
+
+            break :b .{
+                .main = odx,
+                .kind = .destroy,
+                .extra = .{ .mon_op = rnd },
             };
         },
         .@"return" => b: {

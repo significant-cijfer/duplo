@@ -14,6 +14,8 @@ fn main() i32, {
     let z0: X = X{ .a = z };
     //let z1: X = X{ .a = z }; //Uncommenting this line will cause a compilation failure
 
+    destroy z0;
+
     let b: i32 = 1;
     return b + 2;
 };
