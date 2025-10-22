@@ -12,9 +12,9 @@ let y: i32 = 1;
 fn main() i32, {
     let z: x = x{ .a = 1, .b = 2 };
     let z0: X = X{ .a = z };
-    //let z1: X = X{ .a = z }; //Uncommenting this line will cause a compilation failure
+    //let z1: X = X{ .a = z };  //Uncommenting this line will cause a compilation failure
 
-    destroy z0;
+    //destroy z;                //Comment z0, and see the affects
 
     let b: i32 = 1;
     return b + 2;
