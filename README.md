@@ -7,3 +7,6 @@ To run the main example:
 ```sh
 zig build run -- main.dup
 ```
+
+If you see no weird red text saying the most incomprehensible shit ever, you're good :p  
+You just wrote valid code, congrats!  
