@@ -17,12 +17,14 @@ const Node = Parser.Node;
 pub var error_idx: ?u32 = null;
 
 const Error = error {
+    DestroyedLinearInstanceUse,
     IncompatibleStructLitShape,
     NonInitializedStructField,
     NonStructStructLitHead,
     NonCastableStructLit,
     UnrecognizedIdentifier,
     UnhandledExamination,
+    FrameRootLinearDef,
     FrameUncastableReturn,
     FrameUncastableDef,
     FrameEarlyReturn,
@@ -71,7 +73,7 @@ pub const Typx = struct {
         };
 
         const Struct = struct {
-            id: u32, //NOTE, unique to each structdef instance
+            attr: u32, //NOTE, unique to each structdef instance
             fields: u32,
             names: u32,
             len: u32,
@@ -128,19 +130,33 @@ const Init = struct {
     };
 };
 
+const Attr = union {
+    tx_struct: Struct,
+
+    const Struct = struct {
+        linear: bool,
+    };
+};
+
 pub const Context = struct {
     allocator: Allocator,
     table: StringHashMap(Symbol),
     types: ArrayList(Typx),
     inits: ArrayList(Init),
+    attrs: ArrayList(Attr),
     extra: ArrayList(u32),
     frame: Frame,
-    ids: u32,
 
     const Symbol = struct {
+        status: Status = .alive,
         scope: Scope,
         typx: u32,
         init: u32,
+    };
+
+    const Status = enum {
+        alive,
+        used,
     };
 
     const Scope = enum {
@@ -160,9 +176,9 @@ pub const Context = struct {
             .table = .empty,
             .types = .empty,
             .inits = .empty,
+            .attrs = .empty,
             .extra = .empty,
             .frame = .{},
-            .ids = 0,
         };
 
         //NOTE, prevent idx 0, from being correct, thus preserving that spot as a NULL ref
@@ -215,9 +231,9 @@ pub const Context = struct {
             .table = try self.table.clone(self.allocator),
             .types = try self.types.clone(self.allocator),
             .inits = try self.inits.clone(self.allocator),
+            .attrs = try self.attrs.clone(self.allocator),
             .extra = try self.extra.clone(self.allocator),
             .frame = self.frame,
-            .ids = self.ids,
         };
     }
 
@@ -226,11 +242,7 @@ pub const Context = struct {
     }
 
     fn put(self: *Context, key: []const u8, value: Symbol) !void {
-        return self.table.put(self.allocator, key, value);
-    }
-
-    fn get(self: *Context, key: []const u8) ?Symbol {
-        return self.table.get(key);
+        return self.table.putNoClobber(self.allocator, key, value);
     }
 
     fn pushTypx(self: *Context, typx: Typx) !u32 {
@@ -251,13 +263,25 @@ pub const Context = struct {
         return @intCast(idx);
     }
 
+    fn pushAttr(self: *Context, attr: Attr) !u32 {
+        const idx = self.attrs.items.len;
+        try self.attrs.append(self.allocator, attr);
+        return @intCast(idx);
+    }
+
     pub fn extras(self: *const Context, idx: u32, len: u32) []u32 {
         return self.extra.items[idx..idx+len];
     }
 
-    fn newId(self: *Context) u32 {
-        self.ids += 1;
-        return self.ids;
+    fn isLinear(self: *const Context, typx: u32) bool {
+        const ltyp = self.types.items[typx];
+        return switch (ltyp.kind) {
+            .tx_struct => {
+                const attr = ltyp.extra.tx_struct.attr;
+                return self.attrs.items[attr].tx_struct.linear;
+            },
+            else => false,
+        };
     }
 
     //NOTE, rhs has to "transform" into lhs
@@ -290,7 +314,7 @@ pub const Context = struct {
                 else => false,
             },
             .tx_struct => switch (ltyp.kind) {
-                .tx_struct => ltyp.extra.tx_struct.id == rtyp.extra.tx_struct.id,
+                .tx_struct => ltyp.extra.tx_struct.attr == rtyp.extra.tx_struct.attr,
                 else => false,
             },
             .function => switch (ltyp.kind) {
@@ -315,7 +339,7 @@ pub const Context = struct {
         };
     }
 
-    fn examine(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn examine(self: *Context, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -382,6 +406,13 @@ pub const Context = struct {
             .identifier => {
                 const slice = tokens.at(node.main).slice(source);
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
+
+                if (symbol.status == .used)
+                    return error.DestroyedLinearInstanceUse;
+
+                if (self.isLinear(symbol.typx))
+                    self.table.getPtr(slice).?.status = .used;
+
                 return symbol.typx;
             },
             .structdef => {
@@ -438,6 +469,9 @@ pub const Context = struct {
 
                 if (!self.castable(ltypx, rtypx))
                     return error.FrameUncastableDef;
+
+                if (self.frame.return_type == 0 and self.isLinear(ltypx))
+                    return error.FrameRootLinearDef;
 
                 try self.put(name, .{
                     .scope = self.scope(),
@@ -498,7 +532,7 @@ pub const Context = struct {
     }
 
 
-    fn eval(self: *Context, tree: Ast, tokens: *Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn eval(self: *Context, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -513,6 +547,8 @@ pub const Context = struct {
                 });
             },
             .identifier => {
+                //NOTE, linear types should be impossible here
+                //      since they aren't definable in the root frame
                 const slice = tokens.at(node.main).slice(source);
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
                 return if (symbol.init != 0) symbol.init else error.NonComptimeEval;
@@ -538,10 +574,14 @@ pub const Context = struct {
                     );
                 }
 
+                const attr = Attr{ .tx_struct = .{
+                    .linear = tokens.at(node.main+1).kind == .@"linear",
+                }};
+
                 const typx = try self.pushTypx(.{
                     .kind = .tx_struct,
                     .extra = .{ .tx_struct = .{
-                        .id = self.newId(),
+                        .attr = try self.pushAttr(attr),
                         .fields = try self.pushExtraList(fields.items),
                         .names = try self.pushExtraList(names.items),
                         .len = @intCast(fields.items.len),
@@ -589,7 +629,7 @@ pub const Context = struct {
     }
 };
 
-pub fn scan(gpa: Allocator, tree: Ast, tokens: *Tokens, source: [:0]const u8) !Context {
+pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8) !Context {
     var ctx = try Context.init(gpa);
 
     _ = try ctx.examine(tree, tokens, source, 0);

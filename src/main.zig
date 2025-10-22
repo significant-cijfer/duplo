@@ -73,7 +73,7 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
     defer tree.deinit();
     tree.debug(tokens, source, 0, 0);
 
-    var ctx = Context.scan(gpa, tree, &tokens, source) catch |err| {
+    var ctx = Context.scan(gpa, tree, tokens, source) catch |err| {
         const ndx = Context.error_idx.?;
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;

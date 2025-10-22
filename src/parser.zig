@@ -466,51 +466,32 @@ fn parseExprPrelude(
                     tokens.skip();
                     break;
                 },
-                //.@"let" => {
-                //    const power = Op.infixPower(.assign).?;
+                .@"let" => {
+                    const power = Op.infixPower(.assign).?;
 
-                //    const ldx = idx.*;
-                //    try expect(tokens, idx, .@"let");
-                //    try expect(tokens, idx, .identifier);
-                //    try expect(tokens, idx, .@":");
-                //    const typ = try parseExpr(gpa, tokens, source, idx, nodes, extra, power.rbp);
-                //    try expect(tokens, idx, .@"=");
-                //    const expr = try parseExpr(gpa, tokens, source, idx, nodes, extra, 0);
-                //    try expect(tokens, idx, .@";");
+                    const ldx = tokens.idx;
+                    try tokens.expect(.@"let");
+                    try tokens.expect(.identifier);
+                    try tokens.expect(.@":");
+                    const typx = try parseExpr(gpa, tokens, source, tree, power.rbp);
+                    try tokens.expect(.@"=");
+                    const expr = try parseExpr(gpa, tokens, source, tree, 0);
+                    try tokens.expect(.@";");
 
-                //    const tnd = try pushNode(nodes, typ);
-                //    const ind = try pushNode(nodes, .{
-                //        .main = ldx + 1,
-                //        .kind = .identifier,
-                //        .extra = undefined,
-                //    });
-                //    const end = try pushNode(nodes, expr);
-                //    const mnd = try pushNode(nodes, .{
-                //        .main = ldx,
-                //        .kind = .assign,
-                //        .extra = .{
-                //            .lhs = ind,
-                //            .rhs = end,
-                //        },
-                //    });
+                    const tdx = try tree.pushNode(typx);
+                    const edx = try tree.pushNode(expr);
 
-                //    try elems.append(mnd);
+                    const ndx = try tree.pushNode(.{
+                        .main = ldx,
+                        .kind = .vardef,
+                        .extra = .{ .bin_op = .{
+                            .lhs = tdx,
+                            .rhs = edx,
+                        }},
+                    });
 
-                //    const tree = Ast{
-                //        .nodes = nodes.items,
-                //        .extra = extra.items,
-                //    };
-
-                //    const name = tokens[typ.main-2].slice(source);
-                //    const tv = try tree.eval(tokens, source, tables, null, .Type, table, tnd);
-                //    const ev = try tree.eval(tokens, source, tables, name, tv.typ, table, end);
-
-                //    try tables.put(table, name, .{
-                //        .storage = .auto,
-                //        .value = ev,
-                //        .typ = tv.typ,
-                //    });
-                //},
+                    try elems.append(gpa, ndx);
+                },
                 else => {
                     const rhs = try parseExpr(gpa, tokens, source, tree, 0);
                     try tokens.expect(.@";");
@@ -551,6 +532,7 @@ fn parseExprPrelude(
             var members = ArrayList(u32).empty;
             defer members.deinit(gpa);
 
+            tokens.expect(.@"linear") catch {};
             try tokens.expect(.@"{");
 
             while (true) switch (tokens.peek().kind) {
