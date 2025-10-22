@@ -17,6 +17,10 @@ const Node = Parser.Node;
 pub var error_idx: ?u32 = null;
 
 const Error = error {
+    IncompatibleStructLitShape,
+    NonInitializedStructField,
+    NonStructStructLitHead,
+    NonCastableStructLit,
     UnrecognizedIdentifier,
     UnhandledExamination,
     FrameUncastableReturn,
@@ -67,6 +71,7 @@ pub const Typx = struct {
         };
 
         const Struct = struct {
+            id: u32, //NOTE, unique to each structdef instance
             fields: u32,
             names: u32,
             len: u32,
@@ -100,7 +105,6 @@ pub const Typx = struct {
     };
 };
 
-//TODO, get this shi into every .init assignment
 const Init = struct {
     kind: Kind,
     extra: Extra,
@@ -131,6 +135,7 @@ pub const Context = struct {
     inits: ArrayList(Init),
     extra: ArrayList(u32),
     frame: Frame,
+    ids: u32,
 
     const Symbol = struct {
         scope: Scope,
@@ -157,6 +162,7 @@ pub const Context = struct {
             .inits = .empty,
             .extra = .empty,
             .frame = .{},
+            .ids = 0,
         };
 
         //NOTE, prevent idx 0, from being correct, thus preserving that spot as a NULL ref
@@ -211,6 +217,7 @@ pub const Context = struct {
             .inits = try self.inits.clone(self.allocator),
             .extra = try self.extra.clone(self.allocator),
             .frame = self.frame,
+            .ids = self.ids,
         };
     }
 
@@ -244,6 +251,15 @@ pub const Context = struct {
         return @intCast(idx);
     }
 
+    pub fn extras(self: *const Context, idx: u32, len: u32) []u32 {
+        return self.extra.items[idx..idx+len];
+    }
+
+    fn newId(self: *Context) u32 {
+        self.ids += 1;
+        return self.ids;
+    }
+
     //NOTE, rhs has to "transform" into lhs
     fn castable(self: *const Context, lhs: u32, rhs: u32) bool {
         const ltyp = self.types.items[lhs];
@@ -274,23 +290,7 @@ pub const Context = struct {
                 else => false,
             },
             .tx_struct => switch (ltyp.kind) {
-                .tx_struct => {
-                    const lfields = ltyp.extra.tx_struct.fields;
-                    const llen = ltyp.extra.tx_struct.len;
-
-                    const rfields = ltyp.extra.tx_struct.fields;
-                    const rlen = ltyp.extra.tx_struct.len;
-
-                    if (llen != rlen)
-                        return false;
-
-                    //TODO(castable), check fields based on names, not order
-                    for (self.extra.items[lfields..lfields+llen], self.extra.items[rfields..rfields+rlen]) |lfield, rfield|
-                        if (!self.castable(lfield, rfield))
-                            return false;
-
-                    return true;
-                },
+                .tx_struct => ltyp.extra.tx_struct.id == rtyp.extra.tx_struct.id,
                 else => false,
             },
             .function => switch (ltyp.kind) {
@@ -304,7 +304,7 @@ pub const Context = struct {
                     if (lplen != rplen)
                         return false;
 
-                    for (self.extra.items[lprms..lprms+lplen], self.extra.items[rprms..rprms+rplen]) |lprm, rprm|
+                    for (self.extras(lprms, lplen), self.extras(rprms, rplen)) |lprm, rprm|
                         if (!self.castable(lprm, rprm))
                             return false;
 
@@ -388,12 +388,45 @@ pub const Context = struct {
                 return try self.pushTypx(.TYPE);
             },
             .structlit => {
+                var inits = StringHashMap(u32).empty;
+                defer inits.deinit(self.allocator);
+
+                const defs = tree.nodes.items[node.extra.structlit.defs];
+                const mmbrs = tree.extras(defs.extra);
+
+                for (mmbrs) |mmbr| {
+                    const main = tree.nodes.items[mmbr].main - 2;
+                    const name = tokens.at(main).slice(source);
+
+                    try inits.put(
+                        self.allocator,
+                        name,
+                        try self.examine(tree, tokens, source, mmbr)
+                    );
+                }
+
                 const head = try self.eval(tree, tokens, source, node.extra.structlit.head);
-                const hext = self.inits.items[head].extra.tx_type;
+                const hmit = self.inits.items[head];
+                const htype = switch (hmit.kind) {
+                    .tx_type => hmit.extra.tx_type,
+                    else => return error.NonStructStructLitHead,
+                };
 
-                //TODO(structlit), add type checking against head
+                const struc = self.types.items[htype].extra.tx_struct;
+                const fields = self.extras(struc.fields, struc.len);
+                const names = self.extras(struc.names, struc.len);
+                if (struc.len != inits.count())
+                    return error.IncompatibleStructLitShape;
 
-                return hext;
+                for (fields, names) |field, main| {
+                    const name = tokens.at(main).slice(source);
+                    const typx = inits.get(name) orelse return error.NonInitializedStructField;
+
+                    if (!self.castable(self.inits.items[field].extra.tx_type, typx))
+                        return error.NonCastableStructLit;
+                }
+
+                return htype;
             },
             .vardef => {
                 const lhs = try self.eval(tree, tokens, source, node.extra.bin_op.lhs);
@@ -508,6 +541,7 @@ pub const Context = struct {
                 const typx = try self.pushTypx(.{
                     .kind = .tx_struct,
                     .extra = .{ .tx_struct = .{
+                        .id = self.newId(),
                         .fields = try self.pushExtraList(fields.items),
                         .names = try self.pushExtraList(names.items),
                         .len = @intCast(fields.items.len),
