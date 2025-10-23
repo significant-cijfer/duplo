@@ -40,7 +40,7 @@ const Error = error {
     || std.fmt.ParseIntError
     || Allocator.Error;
 
-pub const Typx = struct {
+const Typx = struct {
     kind: Kind,
     extra: Extra,
 
