@@ -29,6 +29,12 @@ pub const Graph = struct {
         return @intCast(idx);
     }
 
+    fn pushExtra(self: *Graph, dep: u32) !u32 {
+        const idx = self.extra.items.len;
+        try self.extra.append(self.allocator, dep);
+        return @intCast(idx);
+    }
+
     fn pushExtraList(self: *Graph, deps: []u32) !u32 {
         const idx = self.extra.items.len;
         try self.extra.appendSlice(self.allocator, deps);
@@ -60,10 +66,26 @@ pub const Graph = struct {
             },
             .fdecl => {
                 //TODO(build, fdecl)
-                return 0;
+                const body = try self.build(tree, node.extra.fdecl.body);
+
+                return try self.pushNode(.{
+                    .main = idx,
+                    .deps = try self.pushExtra(body),
+                    .len = 1,
+                });
             },
             .vardef => {
                 //TODO(build, vardef)
+                return 0;
+            },
+            .block => {
+                //TODO(build, block)
+                const stmts = tree.extras(node.extra);
+
+                for (stmts) |stmt| {
+                    _ = stmt;
+                }
+
                 return 0;
             },
             else => return error.UnhandledBuild,
