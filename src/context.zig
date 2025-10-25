@@ -34,6 +34,7 @@ const Error = error {
     FrameNonDestroy,
     ArithNonCastable,
     ArithNonInteger,
+    VariableShadowed,
     NonComptimeEval,
     UnhandledEval,
 }
@@ -83,6 +84,7 @@ const Typx = struct {
         };
 
         const Function = struct {
+            names: u32,
             prms: u32,
             plen: u32,
             rtyp: u32,
@@ -245,6 +247,9 @@ pub const Context = struct {
     }
 
     fn put(self: *Context, key: []const u8, value: Symbol) !void {
+        if (self.table.contains(key))
+            return error.VariableShadowed;
+
         return self.table.putNoClobber(self.allocator, key, value);
     }
 
@@ -365,6 +370,20 @@ pub const Context = struct {
                 var ctx = try self.clone();
                 defer ctx.deinit();
 
+                const typx = ctx.types.items[proto].extra.function;
+                const names = ctx.extra.items[typx.names..typx.names+typx.plen];
+                const prms = ctx.extra.items[typx.prms..typx.prms+typx.plen];
+
+                for (names, prms) |name, prm| {
+                    const pslice = tokens.at(name).slice(source);
+
+                    try ctx.put(pslice, .{
+                        .scope = .param,
+                        .typx = prm,
+                        .init = 0,
+                    });
+                }
+
                 const rtype = ctx.types.items[proto].extra.function.rtyp;
                 ctx.frame.return_type = rtype;
 
@@ -380,14 +399,25 @@ pub const Context = struct {
                 return proto;
             },
             .fproto => {
+                var names = ArrayList(u32).empty;
+                defer names.deinit(self.allocator);
+
                 var prms = ArrayList(u32).empty;
                 defer prms.deinit(self.allocator);
 
                 const qrms = tree.nodes.items[node.extra.fproto.prms];
                 for (tree.extras(qrms.extra)) |qrm| {
+                    try names.append(
+                        self.allocator,
+                        tree.nodes.items[qrm].main - 2,
+                    );
+
+                    const qinit = try self.eval(tree, tokens, source, qrm);
+                    const qtypx = self.inits.items[qinit].extra.tx_type;
+
                     try prms.append(
                         self.allocator,
-                        try self.examine(tree, tokens, source, qrm),
+                        qtypx,
                     );
                 }
 
@@ -397,6 +427,7 @@ pub const Context = struct {
                 return try self.pushTypx(.{
                     .kind = .function,
                     .extra = .{ .function = .{
+                        .names = try self.pushExtraList(names.items),
                         .prms = try self.pushExtraList(prms.items),
                         .plen = @intCast(prms.items.len),
                         .rtyp = rtype,
@@ -638,6 +669,9 @@ pub const Context = struct {
                     );
                 }
 
+                for (inits.items) |ev|
+                    if (ev == 0) return 0;
+
                 return try self.pushInit(.{
                     .kind = .structlit,
                     .extra = .{ .structlit = .{
@@ -646,6 +680,12 @@ pub const Context = struct {
                         .len = @intCast(inits.items.len),
                     }},
                 });
+            },
+            .add,
+            .sub,
+            .mul,
+            .div => {
+                return 0;
             },
             else => return error.UnhandledEval,
         }
