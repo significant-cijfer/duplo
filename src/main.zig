@@ -8,7 +8,7 @@ const Allocator = std.mem.Allocator;
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
 const Context = @import("context.zig");
-const Dependency = @import("dependency.zig");
+const CGraph = @import("cgraph.zig");
 
 // Global TODOs:
 // None :)
@@ -82,8 +82,8 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
 
     defer ctx.deinit();
 
-    var graph = Dependency.construct(gpa, tree) catch |err| {
-        const ndx = Dependency.error_idx orelse return scream(err);
+    var graph = CGraph.construct(gpa, tree, tokens, source) catch |err| {
+        const ndx = CGraph.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
 
@@ -91,4 +91,5 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
     };
 
     defer graph.deinit();
+    graph.debug();
 }
