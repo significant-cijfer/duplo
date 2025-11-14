@@ -36,11 +36,11 @@ pub const Graph = struct {
     fn reserveBlock(self: *Graph) !u32 {
         const idx = self.blocks.items.len;
         try self.blocks.append(self.allocator, .{
-            .idx = self.insts.items.len,
+            .idx = @intCast(self.insts.items.len),
             .len = undefined,
             .flow = undefined,
         });
-        return idx;
+        return @intCast(idx);
     }
 
     fn flatten(self: *Graph, tree: Ast, tokens: Tokens, source: [:0]const u8, bdx: u32, idx: u32) !u32 {
@@ -117,7 +117,7 @@ pub const Graph = struct {
 
                 self.blocks.items[bdx] = .{
                     .idx = self.blocks.items[bdx].idx,
-                    .len = self.insts.items.len - self.blocks.items[bdx].idx,
+                    .len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[bdx].idx,
                     .flow = .{
                         .kind = .ret,
                         .extra = .{ .none = undefined },
