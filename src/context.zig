@@ -153,8 +153,8 @@ pub const Context = struct {
     frame: Frame,
 
     const Symbol = struct {
+        storage: Storage,
         status: Status = .alive,
-        scope: Scope,
         typx: u32,
         init: u32,
     };
@@ -164,10 +164,11 @@ pub const Context = struct {
         used,
     };
 
-    const Scope = enum {
-        global,
-        local,
-        param,
+    const Storage = enum {
+        none,
+        auto,
+        public,
+        //indirect,
     };
 
     const Frame = struct {
@@ -191,7 +192,7 @@ pub const Context = struct {
         _ = try ctx.pushInit(undefined);
 
         try ctx.put("i32", .{
-            .scope = .global,
+            .storage = .none,
             .typx = try ctx.pushTypx(.{
                 .kind = .tx_type,
                 .extra = .{ .none = undefined },
@@ -209,7 +210,7 @@ pub const Context = struct {
         });
 
         try ctx.put("type", .{
-            .scope = .global,
+            .storage = .none,
             .typx = try ctx.pushTypx(.{
                 .kind = .tx_type,
                 .extra = .{ .none = undefined },
@@ -242,8 +243,8 @@ pub const Context = struct {
         };
     }
 
-    fn scope(self: *const Context) Scope {
-        return if (self.frame.return_type == 0) .global else .local;
+    fn storage(self: *const Context) Storage {
+        return if (self.frame.return_type == 0) .public else .auto;
     }
 
     fn put(self: *Context, key: []const u8, value: Symbol) !void {
@@ -378,7 +379,7 @@ pub const Context = struct {
                     const pslice = tokens.at(name).slice(source);
 
                     try ctx.put(pslice, .{
-                        .scope = .param,
+                        .storage = .auto,
                         .typx = prm,
                         .init = 0,
                     });
@@ -388,7 +389,7 @@ pub const Context = struct {
                 ctx.frame.return_type = rtype;
 
                 try ctx.put(slice, .{
-                    .scope = .global,
+                    .storage = .public,
                     .typx = proto,
                     .init = 0,
                 });
@@ -508,7 +509,7 @@ pub const Context = struct {
                     return error.FrameRootLinearDef;
 
                 try self.put(name, .{
-                    .scope = self.scope(),
+                    .storage = self.storage(),
                     .typx = ltypx,
                     .init = rhs,
                 });
