@@ -9,6 +9,9 @@ const Tokens = Lexer.Tokens;
 const Parser = @import("parser.zig");
 const Ast = Parser.Ast;
 
+const Context = @import("context.zig");
+const Typx = Context.Typx;
+
 pub var error_idx: ?u32 = null;
 
 const Error = error {
@@ -19,13 +22,25 @@ const Error = error {
 pub const Graph = struct {
     allocator: Allocator,
     functions: ArrayList(Function),
+    locations: ArrayList(Location),
     blocks: ArrayList(Block),
     insts: ArrayList(Inst),
     scope: Scope,
 
+    const Location = struct {
+        typx: Typx,
+    };
+
     const Scope = enum {
         root,
         function,
+    };
+
+    //NOTE, its not possible to destructure structs with named fields
+    //      so we define a tuple here
+    const Flat = struct {
+        u32, //block
+        u32, //location
     };
 
     pub fn deinit(self: *Graph) void {
@@ -43,7 +58,15 @@ pub const Graph = struct {
         return @intCast(idx);
     }
 
-    fn flatten(self: *Graph, tree: Ast, tokens: Tokens, source: [:0]const u8, bdx: u32, idx: u32) !u32 {
+    fn reserveLocation(self: *Graph, typx: Typx) !u32 {
+        const idx = self.locations.items.len;
+        try self.locations.append(self.allocator, .{
+            .typx = typx,
+        });
+        return @intCast(idx);
+    }
+
+    fn flatten(self: *Graph, tree: Ast, tokens: Tokens, source: [:0]const u8, bdx: u32, idx: u32) !Flat {
         const node = tree.nodes.items[idx];
         var block = bdx;
 
@@ -56,10 +79,10 @@ pub const Graph = struct {
                 for (roots) |root| {
                     //NOTE, block reassignment is technically useless here
                     //      but it feels nice to do it anyway
-                    block = try self.flatten(tree, tokens, source, block, root);
+                    block, _ = try self.flatten(tree, tokens, source, block, root);
                 }
 
-                return block;
+                return undefined;
             },
             .fdecl => {
                 const name = tokens.at(node.main+1).slice(source);
@@ -73,23 +96,33 @@ pub const Graph = struct {
                 return try self.flatten(tree, tokens, source, root, node.extra.fdecl.body);
             },
             .integer => {
-                //TODO(flatten), expand
+                const dst = try self.reserveLocation(.INTEGER);
+
                 try self.insts.append(self.allocator, .{
-                    .kind = .copy,
+                    .kind = .set,
+                    .extra = .{ .mon_op = .{
+                        .dst = dst,
+                        .tok = node.main
+                    }},
                 });
 
-                return block;
+                return .{ block, dst };
             },
             .identifier => {
-                //TODO(flatten), expand
+                const dst = try self.reserveLocation(.UNDEFINED);
+
                 try self.insts.append(self.allocator, .{
-                    .kind = .copy,
+                    .kind = .load,
+                    .extra = .{ .mon_op = .{
+                        .dst = dst,
+                        .tok = node.main
+                    }},
                 });
 
-                return block;
+                return .{ block, dst };
             },
             .vardef => {
-                if (self.scope == .root) return block;
+                if (self.scope == .root) return .{ block, undefined };
 
                 return error.UnhandledFlatten;
             },
@@ -97,48 +130,86 @@ pub const Graph = struct {
                 const stmts = tree.extras(node.extra);
 
                 for (stmts) |stmt| {
-                    block = try self.flatten(tree, tokens, source, block, stmt);
+                    block, _ = try self.flatten(tree, tokens, source, block, stmt);
                 }
 
-                return block;
+                return .{ block, undefined };
             },
             .add => {
                 //TODO(flatten), expand
-                block = try self.flatten(tree, tokens, source, block, node.extra.bin_op.lhs);
-                block = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
+                const dst = try self.reserveLocation(.UNDEFINED);
+                block, const lhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.lhs);
+                block, const rhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
+
                 try self.insts.append(self.allocator, .{
                     .kind = .add,
+                    .extra = .{ .bin_op = .{
+                        .dst = dst,
+                        .lhs = lhs,
+                        .rhs = rhs,
+                    }},
                 });
 
-                return block;
+                return .{ block, dst };
             },
             .ret => {
-                block = try self.flatten(tree, tokens, source, block, node.extra.mon_op);
+                const dst = try self.reserveLocation(.NORETURN);
+                block, const src = try self.flatten(tree, tokens, source, block, node.extra.mon_op);
+
+                const rdx: u32 = self.blocks.items[bdx].idx;
+                const len: u32 = @intCast(self.insts.items.len);
 
                 self.blocks.items[bdx] = .{
-                    .idx = self.blocks.items[bdx].idx,
-                    .len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[bdx].idx,
+                    .idx = rdx,
+                    .len = len - rdx,
                     .flow = .{
                         .kind = .ret,
-                        .extra = .{ .none = undefined },
+                        .extra = .{ .mono = src },
                     },
                 };
 
-                return block;
+                return .{ block, dst };
             },
             else => return error.UnhandledFlatten,
         }
     }
 
-    pub fn debug(self: Graph) void {
+    pub fn debug(self: Graph, tokens: Tokens, source: [:0]const u8) void {
         for (self.functions.items) |function| {
             std.log.info("Function: {s}", .{function.name});
 
             const block = self.blocks.items[function.root];
-            for (self.insts.items[block.idx..block.idx+block.len]) |inst| {
-                std.log.info("  {any}", .{inst.kind});
+            for (self.insts.items[block.idx..block.idx+block.len]) |inst| switch (inst.kind) {
+                .set => std.log.info("  {any}:  {{{}}} = {s}", .{
+                    inst.kind,
+                    inst.extra.mon_op.dst,
+                    tokens.at(inst.extra.mon_op.tok).slice(source)
+                }),
+                .load => std.log.info("  {any}: {{{}}} = {s}", .{
+                    inst.kind,
+                    inst.extra.mon_op.dst,
+                    tokens.at(inst.extra.mon_op.tok).slice(source)
+                }),
+                .add => std.log.info("  {any}:  {{{}}} = {{{}}} + {{{}}}", .{
+                    inst.kind,
+                    inst.extra.bin_op.dst,
+                    inst.extra.bin_op.lhs,
+                    inst.extra.bin_op.rhs,
+                }),
+            };
+
+            switch (block.flow.kind) {
+                .ret => std.log.info("  {any}:  {{{}}}", .{
+                    block.flow.kind,
+                    block.flow.extra.mono,
+                }),
+                else => @panic("TODO"),
             }
-            std.log.info("  {any}", .{block.flow.kind});
+        }
+
+        std.log.info("Locations:", .{});
+        for (self.locations.items, 0..) |location, idx| {
+            std.log.info("  {{{}}} : {any}", .{idx, location.typx.kind});
         }
     }
 };
@@ -165,7 +236,6 @@ const Flow = struct {
     };
 
     const Extra = union {
-        none: void,
         mono: u32,
         cond: Cond,
 
@@ -178,10 +248,28 @@ const Flow = struct {
 
 const Inst = struct {
     kind: Kind,
+    extra: Extra,
 
     const Kind = enum {
-        copy,
+        set,
+        load,
         add,
+    };
+
+    const Extra = union {
+        mon_op: MonOp,
+        bin_op: BinOp,
+
+        const MonOp = struct {
+            dst: u32,
+            tok: u32,
+        };
+
+        const BinOp = struct {
+            dst: u32,
+            lhs: u32,
+            rhs: u32,
+        };
     };
 };
 
@@ -189,6 +277,7 @@ pub fn construct(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8
     var graph = Graph{
         .allocator = gpa,
         .functions = .empty,
+        .locations = .empty,
         .blocks = .empty,
         .insts = .empty,
         .scope = .root,

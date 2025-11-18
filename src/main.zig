@@ -91,5 +91,5 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
     };
 
     defer graph.deinit();
-    graph.debug();
+    graph.debug(tokens, source);
 }
