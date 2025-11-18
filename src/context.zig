@@ -31,6 +31,7 @@ const Error = error {
     FrameUncastableDef,
     FrameEarlyReturn,
     FrameNonReturn,
+    FrameNoreturn,
     FrameNonDestroy,
     ArithNonCastable,
     ArithNonInteger,
@@ -41,7 +42,7 @@ const Error = error {
     || std.fmt.ParseIntError
     || Allocator.Error;
 
-const Typx = struct {
+pub const Typx = struct {
     kind: Kind,
     extra: Extra,
 
@@ -49,6 +50,7 @@ const Typx = struct {
         tx_type,
         tx_void,
         tx_noreturn,
+        tx_undefined,
         integer,
         ct_integer,
         tx_struct,
@@ -91,22 +93,27 @@ const Typx = struct {
         };
     };
 
-    const VOID = Typx{
+    pub const VOID = Typx{
         .kind = .tx_void,
         .extra = .{ .none = undefined },
     };
 
-    const TYPE = Typx{
+    pub const TYPE = Typx{
         .kind = .tx_type,
         .extra = .{ .none = undefined },
     };
 
-    const NORETURN = Typx{
+    pub const NORETURN = Typx{
         .kind = .tx_noreturn,
         .extra = .{ .none = undefined },
     };
 
-    const INTEGER = Typx{
+    pub const UNDEFINED = Typx{
+        .kind = .tx_undefined,
+        .extra = .{ .none = undefined },
+    };
+
+    pub const INTEGER = Typx{
         .kind = .ct_integer,
         .extra = .{ .none = undefined },
     };
@@ -308,6 +315,10 @@ pub const Context = struct {
                 else => false,
             },
             .tx_noreturn => true,
+            .tx_undefined => switch (ltyp.kind) {
+                .tx_undefined => true,
+                else => false,
+            },
             .integer => switch (ltyp.kind) {
                 .integer => {
                     if (ltyp.extra.integer.sign != rtyp.extra.integer.sign)
@@ -395,7 +406,8 @@ pub const Context = struct {
                 });
 
                 const body = try ctx.examine(tree, tokens, source, node.extra.fdecl.body);
-                _ = body;
+                if (ctx.types.items[body].kind != .tx_noreturn)
+                    return error.FrameNoreturn;
 
                 return proto;
             },
@@ -520,6 +532,7 @@ pub const Context = struct {
                 var ctx = try self.clone();
                 defer ctx.deinit();
 
+                var typx = Typx.VOID;
                 const stmts = tree.extras(node.extra);
 
                 for (stmts, 0..) |stmt, jdx| {
@@ -528,6 +541,7 @@ pub const Context = struct {
                     switch (ctx.types.items[sdx].kind) {
                         .tx_noreturn => {
                             if (jdx < stmts.len-1) return error.FrameEarlyReturn;
+                            typx = .NORETURN;
                             break;
                         },
                         else => {},
@@ -540,7 +554,7 @@ pub const Context = struct {
                         return error.FrameNonDestroyedLinearInstance;
                 }
 
-                return try self.pushTypx(.VOID);
+                return try self.pushTypx(typx);
             },
             .add, .sub, .mul, .div => {
                 const lhs = try self.examine(tree, tokens, source, node.extra.bin_op.lhs);
