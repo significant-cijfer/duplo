@@ -82,11 +82,14 @@ pub const Graph = struct {
                     block, _ = try self.flatten(tree, tokens, source, block, root);
                 }
 
-                return undefined;
+                return .{ block, try self.reserveLocation(.VOID) };
             },
             .fdecl => {
                 const name = tokens.at(node.main+1).slice(source);
                 const root = try self.reserveBlock();
+
+                self.scope = .function;
+                defer self.scope = .root;
 
                 try self.functions.append(self.allocator, .{
                     .name = name,
@@ -102,7 +105,7 @@ pub const Graph = struct {
                     .kind = .set,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
-                        .tok = node.main
+                        .src = node.main
                     }},
                 });
 
@@ -115,16 +118,27 @@ pub const Graph = struct {
                     .kind = .load,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
-                        .tok = node.main
+                        .src = node.main
                     }},
                 });
 
                 return .{ block, dst };
             },
             .vardef => {
-                if (self.scope == .root) return .{ block, undefined };
+                if (self.scope == .root) return .{ block, try self.reserveLocation(.VOID) };
 
-                return error.UnhandledFlatten;
+                const dst = try self.reserveLocation(.UNDEFINED);
+                block, const src = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
+
+                try self.insts.append(self.allocator, .{
+                    .kind = .store,
+                    .extra = .{ .mon_op = .{
+                        .dst = dst,
+                        .src = src,
+                    }},
+                });
+
+                return .{ block, dst };
             },
             .block => {
                 const stmts = tree.extras(node.extra);
@@ -133,16 +147,23 @@ pub const Graph = struct {
                     block, _ = try self.flatten(tree, tokens, source, block, stmt);
                 }
 
-                return .{ block, undefined };
+                return .{ block, try self.reserveLocation(.VOID) };
             },
-            .add => {
-                //TODO(flatten), expand
+            .add, .sub, .mul, .div => {
                 const dst = try self.reserveLocation(.UNDEFINED);
                 block, const lhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.lhs);
                 block, const rhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
 
+                const kind: Inst.Kind = switch (node.kind) {
+                    .add => .add,
+                    .sub => .sub,
+                    .mul => .mul,
+                    .div => .div,
+                    else => unreachable,
+                };
+
                 try self.insts.append(self.allocator, .{
-                    .kind = .add,
+                    .kind = kind,
                     .extra = .{ .bin_op = .{
                         .dst = dst,
                         .lhs = lhs,
@@ -180,17 +201,22 @@ pub const Graph = struct {
 
             const block = self.blocks.items[function.root];
             for (self.insts.items[block.idx..block.idx+block.len]) |inst| switch (inst.kind) {
-                .set => std.log.info("  {any}:  {{{}}} = {s}", .{
+                .set => std.log.info("  {any}:   {{{}}} = {s}", .{
                     inst.kind,
                     inst.extra.mon_op.dst,
-                    tokens.at(inst.extra.mon_op.tok).slice(source)
+                    tokens.at(inst.extra.mon_op.src).slice(source)
                 }),
-                .load => std.log.info("  {any}: {{{}}} = {s}", .{
+                .load => std.log.info("  {any}:  {{{}}} = {s}", .{
                     inst.kind,
                     inst.extra.mon_op.dst,
-                    tokens.at(inst.extra.mon_op.tok).slice(source)
+                    tokens.at(inst.extra.mon_op.src).slice(source)
                 }),
-                .add => std.log.info("  {any}:  {{{}}} = {{{}}} + {{{}}}", .{
+                .store => std.log.info("  {any}: {{{}}} = {{{}}}", .{
+                    inst.kind,
+                    inst.extra.mon_op.dst,
+                    inst.extra.mon_op.src,
+                }),
+                .add, .sub, .mul, .div => std.log.info("  {any}:   {{{}}} = {{{}}} + {{{}}}", .{
                     inst.kind,
                     inst.extra.bin_op.dst,
                     inst.extra.bin_op.lhs,
@@ -253,7 +279,11 @@ const Inst = struct {
     const Kind = enum {
         set,
         load,
+        store,
         add,
+        sub,
+        mul,
+        div,
     };
 
     const Extra = union {
@@ -262,7 +292,7 @@ const Inst = struct {
 
         const MonOp = struct {
             dst: u32,
-            tok: u32,
+            src: u32,
         };
 
         const BinOp = struct {

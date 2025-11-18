@@ -6,7 +6,11 @@ fn inc(x: i32) i32, {
     return x + 1;
 };
 
-fn f(x: i32) i32, return 2;
+fn f(x: i32) i32, {
+    let y: i32 = x * 2;
+
+    return x + y;
+};
 
 //let x: type = struct linear {
 //    a: i32,
