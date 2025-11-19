@@ -5,6 +5,7 @@ const parseInt = std.fmt.parseInt;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const ArrayHashMap = std.AutoArrayHashMap;
 const StringHashMap = std.StringHashMapUnmanaged;
 
 const Lexer = @import("lexer.zig");
@@ -150,7 +151,32 @@ const Attr = union {
     };
 };
 
-pub const Context = struct {
+pub const Tables = struct {
+    table: ArrayHashMap(u32, Table),
+
+    pub fn init(gpa: Allocator) Tables {
+        return .{
+            .table = .init(gpa),
+        };
+    }
+
+    pub fn deinit(self: *Tables) void {
+        for (self.table.values()) |*table|
+            table.deinit();
+
+        self.table.deinit();
+    }
+
+    fn put(self: *Tables, node: u32, table: Table) !void {
+        try self.table.put(node, table);
+    }
+
+    pub fn get(self: Tables, node: u32) ?Table {
+        return self.table.get(node);
+    }
+};
+
+pub const Table = struct {
     allocator: Allocator,
     table: StringHashMap(Symbol),
     types: ArrayList(Typx),
@@ -183,8 +209,8 @@ pub const Context = struct {
         break_type: u32 = 0,
     };
 
-    pub fn init(gpa: Allocator) !Context {
-        var ctx = Context{
+    pub fn init(gpa: Allocator) !Table {
+        var table = Table{
             .allocator = gpa,
             .table = .empty,
             .types = .empty,
@@ -195,18 +221,18 @@ pub const Context = struct {
         };
 
         //NOTE, prevent idx 0, from being correct, thus preserving that spot as a NULL ref
-        _ = try ctx.pushTypx(.VOID);
-        _ = try ctx.pushInit(undefined);
+        _ = try table.pushTypx(.VOID);
+        _ = try table.pushInit(undefined);
 
-        try ctx.put("i32", .{
+        try table.put("i32", .{
             .storage = .none,
-            .typx = try ctx.pushTypx(.{
+            .typx = try table.pushTypx(.{
                 .kind = .tx_type,
                 .extra = .{ .none = undefined },
             }),
-            .init = try ctx.pushInit(.{
+            .init = try table.pushInit(.{
                 .kind = .tx_type,
-                .extra = .{ .tx_type = try ctx.pushTypx(.{
+                .extra = .{ .tx_type = try table.pushTypx(.{
                     .kind = .integer,
                     .extra = .{ .integer = .{
                         .sign = true,
@@ -216,29 +242,29 @@ pub const Context = struct {
             }),
         });
 
-        try ctx.put("type", .{
+        try table.put("type", .{
             .storage = .none,
-            .typx = try ctx.pushTypx(.{
+            .typx = try table.pushTypx(.{
                 .kind = .tx_type,
                 .extra = .{ .none = undefined },
             }),
-            .init = try ctx.pushInit(.{
+            .init = try table.pushInit(.{
                 .kind = .tx_type,
-                .extra = .{ .tx_type = try ctx.pushTypx(.{
+                .extra = .{ .tx_type = try table.pushTypx(.{
                     .kind = .tx_type,
                     .extra = .{ .none = undefined },
                 })},
             }),
         });
 
-        return ctx;
+        return table;
     }
 
-    pub fn deinit(self: *Context) void {
+    pub fn deinit(self: *Table) void {
         self.table.deinit(self.allocator);
     }
 
-    fn clone(self: *Context) !Context {
+    fn clone(self: *Table) !Table {
         return .{
             .allocator = self.allocator,
             .table = try self.table.clone(self.allocator),
@@ -250,46 +276,50 @@ pub const Context = struct {
         };
     }
 
-    fn storage(self: *const Context) Storage {
+    fn storage(self: *const Table) Storage {
         return if (self.frame.return_type == 0) .public else .auto;
     }
 
-    fn put(self: *Context, key: []const u8, value: Symbol) !void {
+    fn put(self: *Table, key: []const u8, value: Symbol) !void {
         if (self.table.contains(key))
             return error.VariableShadowed;
 
         return self.table.putNoClobber(self.allocator, key, value);
     }
 
-    fn pushTypx(self: *Context, typx: Typx) !u32 {
+    pub fn get(self: Table, key: []const u8) ?Symbol {
+        return self.table.get(key);
+    }
+
+    fn pushTypx(self: *Table, typx: Typx) !u32 {
         const idx = self.types.items.len;
         try self.types.append(self.allocator, typx);
         return @intCast(idx);
     }
 
-    fn pushExtraList(self: *Context, typxs: []u32) !u32 {
+    fn pushExtraList(self: *Table, typxs: []u32) !u32 {
         const idx = self.extra.items.len;
         try self.extra.appendSlice(self.allocator, typxs);
         return @intCast(idx);
     }
 
-    fn pushInit(self: *Context, innit: Init) !u32 {
+    fn pushInit(self: *Table, innit: Init) !u32 {
         const idx = self.inits.items.len;
         try self.inits.append(self.allocator, innit);
         return @intCast(idx);
     }
 
-    fn pushAttr(self: *Context, attr: Attr) !u32 {
+    fn pushAttr(self: *Table, attr: Attr) !u32 {
         const idx = self.attrs.items.len;
         try self.attrs.append(self.allocator, attr);
         return @intCast(idx);
     }
 
-    pub fn extras(self: *const Context, idx: u32, len: u32) []u32 {
+    pub fn extras(self: *const Table, idx: u32, len: u32) []u32 {
         return self.extra.items[idx..idx+len];
     }
 
-    fn isLinear(self: *const Context, typx: u32) bool {
+    fn isLinear(self: *const Table, typx: u32) bool {
         const ltyp = self.types.items[typx];
         return switch (ltyp.kind) {
             .tx_struct => {
@@ -301,7 +331,7 @@ pub const Context = struct {
     }
 
     //NOTE, rhs has to "transform" into lhs
-    fn castable(self: *const Context, lhs: u32, rhs: u32) bool {
+    fn castable(self: *const Table, lhs: u32, rhs: u32) bool {
         const ltyp = self.types.items[lhs];
         const rtyp = self.types.items[rhs];
 
@@ -359,7 +389,7 @@ pub const Context = struct {
         };
     }
 
-    fn examine(self: *Context, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn examine(self: *Table, tables: *Tables, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -369,46 +399,47 @@ pub const Context = struct {
                 const roots = tree.extras(node.extra);
 
                 for (roots) |root| {
-                    const sdx = try self.examine(tree, tokens, source, root);
+                    const sdx = try self.examine(tables, tree, tokens, source, root);
                     _ = sdx;
                 }
 
                 return try self.pushTypx(.VOID);
             },
             .fdecl => {
-                const proto = try self.examine(tree, tokens, source, node.extra.fdecl.proto);
+                const proto = try self.examine(tables, tree, tokens, source, node.extra.fdecl.proto);
                 const slice = tokens.at(node.main+1).slice(source);
 
-                var ctx = try self.clone();
-                defer ctx.deinit();
+                var table = try self.clone();
+                //defer table.deinit();
 
-                const typx = ctx.types.items[proto].extra.function;
-                const names = ctx.extra.items[typx.names..typx.names+typx.plen];
-                const prms = ctx.extra.items[typx.prms..typx.prms+typx.plen];
+                const typx = table.types.items[proto].extra.function;
+                const names = table.extra.items[typx.names..typx.names+typx.plen];
+                const prms = table.extra.items[typx.prms..typx.prms+typx.plen];
 
                 for (names, prms) |name, prm| {
                     const pslice = tokens.at(name).slice(source);
 
-                    try ctx.put(pslice, .{
+                    try table.put(pslice, .{
                         .storage = .auto,
                         .typx = prm,
                         .init = 0,
                     });
                 }
 
-                const rtype = ctx.types.items[proto].extra.function.rtyp;
-                ctx.frame.return_type = rtype;
+                const rtype = table.types.items[proto].extra.function.rtyp;
+                table.frame.return_type = rtype;
 
-                try ctx.put(slice, .{
+                try table.put(slice, .{
                     .storage = .public,
                     .typx = proto,
                     .init = 0,
                 });
 
-                const body = try ctx.examine(tree, tokens, source, node.extra.fdecl.body);
-                if (ctx.types.items[body].kind != .tx_noreturn)
+                const body = try table.examine(tables, tree, tokens, source, node.extra.fdecl.body);
+                if (table.types.items[body].kind != .tx_noreturn)
                     return error.FrameNoreturn;
 
+                try tables.put(idx, table);
                 return proto;
             },
             .fproto => {
@@ -479,7 +510,7 @@ pub const Context = struct {
                     try inits.put(
                         self.allocator,
                         name,
-                        try self.examine(tree, tokens, source, mmbr)
+                        try self.examine(tables, tree, tokens, source, mmbr)
                     );
                 }
 
@@ -512,7 +543,7 @@ pub const Context = struct {
 
                 const name = tokens.at(node.main+1).slice(source);
                 const ltypx = self.inits.items[lhs].extra.tx_type;
-                const rtypx = try self.examine(tree, tokens, source, node.extra.bin_op.rhs);
+                const rtypx = try self.examine(tables, tree, tokens, source, node.extra.bin_op.rhs);
 
                 if (!self.castable(ltypx, rtypx))
                     return error.FrameUncastableDef;
@@ -529,16 +560,16 @@ pub const Context = struct {
                 return ltypx;
             },
             .block => {
-                var ctx = try self.clone();
-                defer ctx.deinit();
+                var table = try self.clone();
+                //defer table.deinit();
 
                 var typx = Typx.VOID;
                 const stmts = tree.extras(node.extra);
 
                 for (stmts, 0..) |stmt, jdx| {
-                    const sdx = try ctx.examine(tree, tokens, source, stmt);
+                    const sdx = try table.examine(tables, tree, tokens, source, stmt);
 
-                    switch (ctx.types.items[sdx].kind) {
+                    switch (table.types.items[sdx].kind) {
                         .tx_noreturn => {
                             if (jdx < stmts.len-1) return error.FrameEarlyReturn;
                             typx = .NORETURN;
@@ -548,17 +579,18 @@ pub const Context = struct {
                     }
                 }
 
-                var symbols = ctx.table.iterator();
+                var symbols = table.table.iterator();
                 while (symbols.next()) |symbol| {
-                    if (!self.table.contains(symbol.key_ptr.*) and ctx.isLinear(symbol.value_ptr.typx) and symbol.value_ptr.status == .alive)
+                    if (!self.table.contains(symbol.key_ptr.*) and table.isLinear(symbol.value_ptr.typx) and symbol.value_ptr.status == .alive)
                         return error.FrameNonDestroyedLinearInstance;
                 }
 
+                try tables.put(idx, table);
                 return try self.pushTypx(typx);
             },
             .add, .sub, .mul, .div => {
-                const lhs = try self.examine(tree, tokens, source, node.extra.bin_op.lhs);
-                const rhs = try self.examine(tree, tokens, source, node.extra.bin_op.rhs);
+                const lhs = try self.examine(tables, tree, tokens, source, node.extra.bin_op.lhs);
+                const rhs = try self.examine(tables, tree, tokens, source, node.extra.bin_op.rhs);
 
                 const ltyp = self.types.items[lhs];
                 const rtyp = self.types.items[rhs];
@@ -572,7 +604,7 @@ pub const Context = struct {
                 return lhs;
             },
             .destroy => {
-                const rtype = try self.examine(tree, tokens, source, node.extra.mon_op);
+                const rtype = try self.examine(tables, tree, tokens, source, node.extra.mon_op);
 
                 if (self.frame.return_type == 0)
                     return error.FrameNonDestroy;
@@ -586,7 +618,7 @@ pub const Context = struct {
                 const rtype = if (node.extra.mon_op == 0)
                     try self.pushTypx(.VOID)
                 else
-                    try self.examine(tree, tokens, source, node.extra.mon_op);
+                    try self.examine(tables, tree, tokens, source, node.extra.mon_op);
 
                 if (self.frame.return_type == 0)
                     return error.FrameNonReturn;
@@ -601,7 +633,7 @@ pub const Context = struct {
     }
 
 
-    fn eval(self: *Context, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn eval(self: *Table, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -707,10 +739,12 @@ pub const Context = struct {
     }
 };
 
-pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8) !Context {
-    var ctx = try Context.init(gpa);
+pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8) !Tables {
+    var tables = Tables.init(gpa);
+    var table = try Table.init(gpa);
 
-    _ = try ctx.examine(tree, tokens, source, 0);
+    _ = try table.examine(&tables, tree, tokens, source, 0);
 
-    return ctx;
+    try tables.put(0, table);
+    return tables;
 }

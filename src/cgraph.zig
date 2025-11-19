@@ -10,6 +10,7 @@ const Parser = @import("parser.zig");
 const Ast = Parser.Ast;
 
 const Context = @import("context.zig");
+const Tables = Context.Tables;
 const Typx = Context.Typx;
 
 pub var error_idx: ?u32 = null;
@@ -66,7 +67,8 @@ pub const Graph = struct {
         return @intCast(idx);
     }
 
-    fn flatten(self: *Graph, tree: Ast, tokens: Tokens, source: [:0]const u8, bdx: u32, idx: u32) !Flat {
+    fn flatten(self: *Graph, tables: Tables, tree: Ast, tokens: Tokens, source: [:0]const u8, tdx: u32, bdx: u32, idx: u32) !Flat {
+        const table = tables.get(tdx).?;
         const node = tree.nodes.items[idx];
         var block = bdx;
 
@@ -79,7 +81,7 @@ pub const Graph = struct {
                 for (roots) |root| {
                     //NOTE, block reassignment is technically useless here
                     //      but it feels nice to do it anyway
-                    block, _ = try self.flatten(tree, tokens, source, block, root);
+                    block, _ = try self.flatten(tables, tree, tokens, source, idx, block, root);
                 }
 
                 return .{ block, try self.reserveLocation(.VOID) };
@@ -96,7 +98,7 @@ pub const Graph = struct {
                     .root = root,
                 });
 
-                return try self.flatten(tree, tokens, source, root, node.extra.fdecl.body);
+                return try self.flatten(tables, tree, tokens, source, idx, root, node.extra.fdecl.body);
             },
             .integer => {
                 const dst = try self.reserveLocation(.INTEGER);
@@ -112,7 +114,11 @@ pub const Graph = struct {
                 return .{ block, dst };
             },
             .identifier => {
-                const dst = try self.reserveLocation(.UNDEFINED);
+                const name = tokens.at(node.main).slice(source);
+                const symb = table.get(name).?;
+                const typx = table.types.items[symb.typx];
+
+                const dst = try self.reserveLocation(typx);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .load,
@@ -127,8 +133,12 @@ pub const Graph = struct {
             .vardef => {
                 if (self.scope == .root) return .{ block, try self.reserveLocation(.VOID) };
 
-                const dst = try self.reserveLocation(.UNDEFINED);
-                block, const src = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
+                const name = tokens.at(node.main+1).slice(source);
+                const symb = table.get(name).?;
+                const typx = table.types.items[symb.typx];
+
+                block, const src = try self.flatten(tables, tree, tokens, source, tdx, block, node.extra.bin_op.rhs);
+                const dst = try self.reserveLocation(typx);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .store,
@@ -144,15 +154,17 @@ pub const Graph = struct {
                 const stmts = tree.extras(node.extra);
 
                 for (stmts) |stmt| {
-                    block, _ = try self.flatten(tree, tokens, source, block, stmt);
+                    block, _ = try self.flatten(tables, tree, tokens, source, idx, block, stmt);
                 }
 
                 return .{ block, try self.reserveLocation(.VOID) };
             },
             .add, .sub, .mul, .div => {
-                const dst = try self.reserveLocation(.UNDEFINED);
-                block, const lhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.lhs);
-                block, const rhs = try self.flatten(tree, tokens, source, block, node.extra.bin_op.rhs);
+                block, const lhs = try self.flatten(tables, tree, tokens, source, tdx, block, node.extra.bin_op.lhs);
+                block, const rhs = try self.flatten(tables, tree, tokens, source, tdx, block, node.extra.bin_op.rhs);
+
+                const loct = self.locations.items[lhs];
+                const dst = try self.reserveLocation(loct.typx);
 
                 const kind: Inst.Kind = switch (node.kind) {
                     .add => .add,
@@ -174,8 +186,8 @@ pub const Graph = struct {
                 return .{ block, dst };
             },
             .ret => {
+                block, const src = try self.flatten(tables, tree, tokens, source, tdx, block, node.extra.mon_op);
                 const dst = try self.reserveLocation(.NORETURN);
-                block, const src = try self.flatten(tree, tokens, source, block, node.extra.mon_op);
 
                 const rdx: u32 = self.blocks.items[bdx].idx;
                 const len: u32 = @intCast(self.insts.items.len);
@@ -303,7 +315,7 @@ const Inst = struct {
     };
 };
 
-pub fn construct(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8) !Graph {
+pub fn construct(gpa: Allocator, tables: Tables, tree: Ast, tokens: Tokens, source: [:0]const u8) !Graph {
     var graph = Graph{
         .allocator = gpa,
         .functions = .empty,
@@ -313,7 +325,7 @@ pub fn construct(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8
         .scope = .root,
     };
 
-    _ = try graph.flatten(tree, tokens, source, 0, 0);
+    _ = try graph.flatten(tables, tree, tokens, source, 0, 0, 0);
 
     return graph;
 }

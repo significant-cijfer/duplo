@@ -72,7 +72,7 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
     defer tree.deinit();
     tree.debug(tokens, source, 0, 0);
 
-    var ctx = Context.scan(gpa, tree, tokens, source) catch |err| {
+    var tables = Context.scan(gpa, tree, tokens, source) catch |err| {
         const ndx = Context.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
@@ -80,9 +80,9 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
         return complain(source, err, idx);
     };
 
-    defer ctx.deinit();
+    defer tables.deinit();
 
-    var graph = CGraph.construct(gpa, tree, tokens, source) catch |err| {
+    var graph = CGraph.construct(gpa, tables, tree, tokens, source) catch |err| {
         const ndx = CGraph.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
