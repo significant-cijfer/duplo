@@ -237,7 +237,7 @@ pub const Graph = struct {
             };
 
             switch (block.flow.kind) {
-                .ret => std.log.info("  {any}:  {{{}}}", .{
+                .ret => std.log.info("  {any}:   {{{}}}", .{
                     block.flow.kind,
                     block.flow.extra.mono,
                 }),
@@ -315,7 +315,7 @@ const Inst = struct {
     };
 };
 
-pub fn construct(gpa: Allocator, tables: Tables, tree: Ast, tokens: Tokens, source: [:0]const u8) !Graph {
+pub fn flatten(gpa: Allocator, tables: Tables, tree: Ast, tokens: Tokens, source: [:0]const u8) !Graph {
     var graph = Graph{
         .allocator = gpa,
         .functions = .empty,

@@ -2,13 +2,16 @@ const std = @import("std");
 
 const log = std.log;
 const cwd = std.fs.cwd;
+const stdout = std.fs.File.stdout();
 
+const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
 const Context = @import("context.zig");
-const CGraph = @import("cgraph.zig");
+const Flattener = @import("flattener.zig");
+const Generator = @import("generator.zig");
 
 // Global TODOs:
 // None :)
@@ -31,7 +34,13 @@ pub fn main() void {
         catch return log.err("Couldn't open '{s}'", .{path});
     defer gpa.free(source);
 
-    compile(gpa, source);
+    var buffer: [8192]u8 = undefined;
+    var writer = stdout.writer(&buffer);
+
+    compile(gpa, &writer.interface, source);
+
+    writer.end()
+        catch return log.err("Couldn't flush stdout", .{});
 }
 
 fn complain(source: [:0]const u8, err: anyerror, idx: u32) void {
@@ -52,7 +61,7 @@ fn scream(err: anyerror) void {
     std.debug.print("\x1B[31mUnhandleable {}\x1B[0m\n", .{err});
 }
 
-fn compile(gpa: Allocator, source: [:0]const u8) void {
+fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     var tokens = Lexer.lex(gpa, source) catch |err| {
         const idx = Lexer.error_idx orelse return scream(err);
 
@@ -82,8 +91,8 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
 
     defer tables.deinit();
 
-    var graph = CGraph.construct(gpa, tables, tree, tokens, source) catch |err| {
-        const ndx = CGraph.error_idx orelse return scream(err);
+    var graph = Flattener.flatten(gpa, tables, tree, tokens, source) catch |err| {
+        const ndx = Flattener.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
 
@@ -92,4 +101,8 @@ fn compile(gpa: Allocator, source: [:0]const u8) void {
 
     defer graph.deinit();
     graph.debug(tokens, source);
+
+    Generator.generate(.zig, writer, graph) catch |err| {
+        return scream(err);
+    };
 }
