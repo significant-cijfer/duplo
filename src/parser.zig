@@ -53,7 +53,6 @@ pub const Ast = struct {
     pub fn debug(
         self: Ast,
         tokens: Tokens,
-        source: [:0]const u8,
         idx: u32,
         depth: u32
     ) void {
@@ -68,7 +67,7 @@ pub const Ast = struct {
             .fproto => std.debug.print("fproto\n", .{}),
             .block => std.debug.print("{{}}\n", .{}),
             .list => std.debug.print("()\n", .{}),
-            else => std.debug.print("{s}\n", .{tokens.at(node.main).slice(source)}),
+            else => std.debug.print("{s}\n", .{tokens.slice(node.main)}),
         }
 
         switch (node.kind) {
@@ -76,20 +75,20 @@ pub const Ast = struct {
                 const roots = self.extras(node.extra);
 
                 for (roots) |root| {
-                    self.debug(tokens, source, root, depth+1);
+                    self.debug(tokens, root, depth+1);
                 }
             },
             .fdecl => {
-                self.debug(tokens, source, node.extra.fdecl.proto, depth+1);
-                self.debug(tokens, source, node.extra.fdecl.body, depth+1);
+                self.debug(tokens, node.extra.fdecl.proto, depth+1);
+                self.debug(tokens, node.extra.fdecl.body, depth+1);
             },
             .fcall => {
-                self.debug(tokens, source, node.extra.fcall.func, depth+1);
-                self.debug(tokens, source, node.extra.fcall.args, depth+1);
+                self.debug(tokens, node.extra.fcall.func, depth+1);
+                self.debug(tokens, node.extra.fcall.args, depth+1);
             },
             .fproto => {
-                self.debug(tokens, source, node.extra.fproto.prms, depth+1);
-                self.debug(tokens, source, node.extra.fproto.rtyp, depth+1);
+                self.debug(tokens, node.extra.fproto.prms, depth+1);
+                self.debug(tokens, node.extra.fproto.rtyp, depth+1);
             },
             .integer => {},
             .identifier => {},
@@ -97,27 +96,27 @@ pub const Ast = struct {
                 const mmbrs = self.extras(node.extra);
 
                 for (mmbrs) |mmbr| {
-                    self.debug(tokens, source, mmbr, depth+1);
+                    self.debug(tokens, mmbr, depth+1);
                 }
             },
             .structlit => {
-                self.debug(tokens, source, node.extra.structlit.head, depth+1);
-                self.debug(tokens, source, node.extra.structlit.defs, depth+1);
+                self.debug(tokens, node.extra.structlit.head, depth+1);
+                self.debug(tokens, node.extra.structlit.defs, depth+1);
             },
             .vardef => {
                 for (0..depth+1) |_|
                     std.debug.print("  ", .{});
 
-                std.debug.print("{s}\n", .{tokens.at(node.main+1).slice(source)});
-                self.debug(tokens, source, node.extra.bin_op.lhs, depth+2);
-                self.debug(tokens, source, node.extra.bin_op.rhs, depth+2);
+                std.debug.print("{s}\n", .{tokens.slice(node.main+1)});
+                self.debug(tokens, node.extra.bin_op.lhs, depth+2);
+                self.debug(tokens, node.extra.bin_op.rhs, depth+2);
             },
             .block,
             .list => {
                 const stmts = self.extras(node.extra);
 
                 for (stmts) |stmt| {
-                    self.debug(tokens, source, stmt, depth+1);
+                    self.debug(tokens, stmt, depth+1);
                 }
             },
             .add,
@@ -127,26 +126,26 @@ pub const Ast = struct {
             .assign,
             .logand,
             .logior => {
-                self.debug(tokens, source, node.extra.bin_op.lhs, depth+1);
-                self.debug(tokens, source, node.extra.bin_op.rhs, depth+1);
+                self.debug(tokens, node.extra.bin_op.lhs, depth+1);
+                self.debug(tokens, node.extra.bin_op.rhs, depth+1);
             },
             .dot => {
-                self.debug(tokens, source, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth+1);
             },
             .ref,
             .deref => {
-                self.debug(tokens, source, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth+1);
             },
             .ternary => {
-                self.debug(tokens, source, node.extra.tri_op.lhs, depth+1);
-                self.debug(tokens, source, node.extra.tri_op.mhs, depth+1);
-                self.debug(tokens, source, node.extra.tri_op.mhs+1, depth+1);
+                self.debug(tokens, node.extra.tri_op.lhs, depth+1);
+                self.debug(tokens, node.extra.tri_op.mhs, depth+1);
+                self.debug(tokens, node.extra.tri_op.mhs+1, depth+1);
             },
             .destroy => {
-                self.debug(tokens, source, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth+1);
             },
             .ret => if (node.extra.mon_op != 0) {
-                self.debug(tokens, source, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth+1);
             },
         }
     }
@@ -289,7 +288,7 @@ const Op = enum {
     }
 };
 
-pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
+pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
     var tree = Ast{
         .allocator = gpa,
         .nodes = .empty,
@@ -321,7 +320,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                     else => {
                         try tokens.expect(.identifier);
                         try tokens.expect(.@":");
-                        const typ = try parseExpr(gpa, tokens, source, &tree, 0);
+                        const typ = try parseExpr(gpa, tokens, &tree, 0);
                         const tnd = try tree.pushNode(typ);
                         try prms.append(gpa, tnd);
 
@@ -333,9 +332,9 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                     },
                 };
 
-                const rtyp = try parseExpr(gpa, tokens, source, &tree, 0);
+                const rtyp = try parseExpr(gpa, tokens, &tree, 0);
                 try tokens.expect(.@",");
-                const body = try parseExpr(gpa, tokens, source, &tree, 0);
+                const body = try parseExpr(gpa, tokens, &tree, 0);
                 try tokens.expect(.@";");
 
                 const qrms = try tree.pushNode(.{
@@ -376,9 +375,9 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
                 try tokens.expect(.@"let");
                 try tokens.expect(.identifier);
                 try tokens.expect(.@":");
-                const typx = try parseExpr(gpa, tokens, source, &tree, power.rbp);
+                const typx = try parseExpr(gpa, tokens, &tree, power.rbp);
                 try tokens.expect(.@"=");
-                const expr = try parseExpr(gpa, tokens, source, &tree, 0);
+                const expr = try parseExpr(gpa, tokens, &tree, 0);
                 try tokens.expect(.@";");
 
                 const tdx = try tree.pushNode(typx);
@@ -414,18 +413,16 @@ pub fn parse(gpa: Allocator, tokens: *Tokens, source: [:0]const u8) !Ast {
 fn parseExpr(
     gpa: Allocator,
     tokens: *Tokens,
-    source: [:0]const u8,
     tree: *Ast,
     bp: u8,
 ) Error!Node {
-    const prelude = try parseExprPrelude(gpa, tokens, source, tree) orelse return error.UnexpectedFirstToken;
-    return try parseExprBody(gpa, tokens, source, tree, prelude, bp);
+    const prelude = try parseExprPrelude(gpa, tokens, tree) orelse return error.UnexpectedFirstToken;
+    return try parseExprBody(gpa, tokens, tree, prelude, bp);
 }
 
 fn parseExprPrelude(
     gpa: Allocator,
     tokens: *Tokens,
-    source: [:0]const u8,
     tree: *Ast,
 ) Error!?Node {
     return switch (tokens.next().kind) {
@@ -442,7 +439,7 @@ fn parseExprPrelude(
         .@"&" => b: {
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.ref).?;
-            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
+            const rhs = try parseExpr(gpa, tokens, tree, rbp);
             const rnd = try tree.pushNode(rhs);
 
             break :b .{
@@ -454,7 +451,7 @@ fn parseExprPrelude(
         .@"*" => b: {
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.deref).?;
-            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
+            const rhs = try parseExpr(gpa, tokens, tree, rbp);
             const rnd = try tree.pushNode(rhs);
 
             break :b .{
@@ -480,9 +477,9 @@ fn parseExprPrelude(
                     try tokens.expect(.@"let");
                     try tokens.expect(.identifier);
                     try tokens.expect(.@":");
-                    const typx = try parseExpr(gpa, tokens, source, tree, power.rbp);
+                    const typx = try parseExpr(gpa, tokens, tree, power.rbp);
                     try tokens.expect(.@"=");
-                    const expr = try parseExpr(gpa, tokens, source, tree, 0);
+                    const expr = try parseExpr(gpa, tokens, tree, 0);
                     try tokens.expect(.@";");
 
                     const tdx = try tree.pushNode(typx);
@@ -500,7 +497,7 @@ fn parseExprPrelude(
                     try elems.append(gpa, ndx);
                 },
                 else => {
-                    const rhs = try parseExpr(gpa, tokens, source, tree, 0);
+                    const rhs = try parseExpr(gpa, tokens, tree, 0);
                     try tokens.expect(.@";");
 
                     const rnd = try tree.pushNode(rhs);
@@ -521,7 +518,7 @@ fn parseExprPrelude(
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.destroy).?;
 
-            const rhs = try parseExpr(gpa, tokens, source, tree, rbp);
+            const rhs = try parseExpr(gpa, tokens, tree, rbp);
             const rnd = try tree.pushNode(rhs);
 
             break :b .{
@@ -534,8 +531,8 @@ fn parseExprPrelude(
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.ret).?;
 
-            const rnd = if (try parseExprPrelude(gpa, tokens, source, tree)) |pre| r: {
-                const rhs = try parseExprBody(gpa, tokens, source, tree, pre, rbp);
+            const rnd = if (try parseExprPrelude(gpa, tokens, tree)) |pre| r: {
+                const rhs = try parseExprBody(gpa, tokens, tree, pre, rbp);
                 break :r try tree.pushNode(rhs);
             } else r: {
                 break :r 0;
@@ -563,7 +560,7 @@ fn parseExprPrelude(
                 else => {
                     try tokens.expect(.identifier);
                     try tokens.expect(.@":");
-                    const typ = try parseExpr(gpa, tokens, source, tree, 0);
+                    const typ = try parseExpr(gpa, tokens, tree, 0);
                     const tnd = try tree.pushNode(typ);
                     try members.append(gpa, tnd);
 
@@ -586,10 +583,10 @@ fn parseExprPrelude(
         },
         .@"if" => b: {
             const odx = tokens.idx - 1;
-            const chs = try parseExpr(gpa, tokens, source, tree, 0);
-            const lhs = try parseExpr(gpa, tokens, source, tree, 0);
+            const chs = try parseExpr(gpa, tokens, tree, 0);
+            const lhs = try parseExpr(gpa, tokens, tree, 0);
             try tokens.expect(.@"else");
-            const rhs = try parseExpr(gpa, tokens, source, tree, 0);
+            const rhs = try parseExpr(gpa, tokens, tree, 0);
 
             const cnd = try tree.pushNode(chs);
             const lnd = try tree.pushNode(lhs);
@@ -616,7 +613,6 @@ fn parseExprPrelude(
 fn parseExprBody(
     gpa: Allocator,
     tokens: *Tokens,
-    source: [:0]const u8,
     tree: *Ast,
     pre: Node,
     bp: u8,
@@ -648,7 +644,7 @@ fn parseExprBody(
                         break;
                     },
                     else => {
-                        const arg = try parseExpr(gpa, tokens, source, tree, 0);
+                        const arg = try parseExpr(gpa, tokens, tree, 0);
                         const gnd = try tree.pushNode(arg);
                         try args.append(gpa, gnd);
 
@@ -696,7 +692,7 @@ fn parseExprBody(
                         try tokens.expect(.@".");
                         try tokens.expect(.identifier);
                         try tokens.expect(.@"=");
-                        const def = try parseExpr(gpa, tokens, source, tree, 0);
+                        const def = try parseExpr(gpa, tokens, tree, 0);
                         const dnd = try tree.pushNode(def);
                         try defs.append(gpa, dnd);
 
@@ -754,7 +750,7 @@ fn parseExprBody(
             tokens.skip();
 
             const lnd = try tree.pushNode(lhs);
-            const rhs = try parseExpr(gpa, tokens, source, tree, p.rbp);
+            const rhs = try parseExpr(gpa, tokens, tree, p.rbp);
             const rnd = try tree.pushNode(rhs);
 
             lhs = .{

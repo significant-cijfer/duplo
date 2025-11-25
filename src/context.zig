@@ -389,7 +389,7 @@ pub const Table = struct {
         };
     }
 
-    fn examine(self: *Table, tables: *Tables, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn examine(self: *Table, tables: *Tables, tree: Ast, tokens: Tokens, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
@@ -399,15 +399,15 @@ pub const Table = struct {
                 const roots = tree.extras(node.extra);
 
                 for (roots) |root| {
-                    const sdx = try self.examine(tables, tree, tokens, source, root);
+                    const sdx = try self.examine(tables, tree, tokens, root);
                     _ = sdx;
                 }
 
                 return try self.pushTypx(.VOID);
             },
             .fdecl => {
-                const proto = try self.examine(tables, tree, tokens, source, node.extra.fdecl.proto);
-                const slice = tokens.at(node.main+1).slice(source);
+                const proto = try self.examine(tables, tree, tokens, node.extra.fdecl.proto);
+                const slice = tokens.slice(node.main+1);
 
                 var table = try self.clone();
                 //defer table.deinit();
@@ -417,7 +417,7 @@ pub const Table = struct {
                 const prms = table.extra.items[typx.prms..typx.prms+typx.plen];
 
                 for (names, prms) |name, prm| {
-                    const pslice = tokens.at(name).slice(source);
+                    const pslice = tokens.slice(name);
 
                     try table.put(pslice, .{
                         .storage = .auto,
@@ -435,7 +435,7 @@ pub const Table = struct {
                     .init = 0,
                 });
 
-                const body = try table.examine(tables, tree, tokens, source, node.extra.fdecl.body);
+                const body = try table.examine(tables, tree, tokens, node.extra.fdecl.body);
                 if (table.types.items[body].kind != .tx_noreturn)
                     return error.FrameNoreturn;
 
@@ -456,7 +456,7 @@ pub const Table = struct {
                         tree.nodes.items[qrm].main - 2,
                     );
 
-                    const qinit = try self.eval(tree, tokens, source, qrm);
+                    const qinit = try self.eval(tree, tokens, qrm);
                     const qtypx = self.inits.items[qinit].extra.tx_type;
 
                     try prms.append(
@@ -465,7 +465,7 @@ pub const Table = struct {
                     );
                 }
 
-                const rinit = try self.eval(tree, tokens, source, node.extra.fproto.rtyp);
+                const rinit = try self.eval(tree, tokens, node.extra.fproto.rtyp);
                 const rtype = self.inits.items[rinit].extra.tx_type;
 
                 return try self.pushTypx(.{
@@ -482,7 +482,7 @@ pub const Table = struct {
                 return try self.pushTypx(.INTEGER);
             },
             .identifier => {
-                const slice = tokens.at(node.main).slice(source);
+                const slice = tokens.slice(node.main);
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
 
                 if (symbol.status == .used)
@@ -505,16 +505,16 @@ pub const Table = struct {
 
                 for (mmbrs) |mmbr| {
                     const main = tree.nodes.items[mmbr].main - 2;
-                    const name = tokens.at(main).slice(source);
+                    const name = tokens.slice(main);
 
                     try inits.put(
                         self.allocator,
                         name,
-                        try self.examine(tables, tree, tokens, source, mmbr)
+                        try self.examine(tables, tree, tokens, mmbr)
                     );
                 }
 
-                const head = try self.eval(tree, tokens, source, node.extra.structlit.head);
+                const head = try self.eval(tree, tokens, node.extra.structlit.head);
                 const hmit = self.inits.items[head];
                 const htype = switch (hmit.kind) {
                     .tx_type => hmit.extra.tx_type,
@@ -528,7 +528,7 @@ pub const Table = struct {
                     return error.IncompatibleStructLitShape;
 
                 for (fields, names) |field, main| {
-                    const name = tokens.at(main).slice(source);
+                    const name = tokens.slice(main);
                     const typx = inits.get(name) orelse return error.NonInitializedStructField;
 
                     if (!self.castable(self.inits.items[field].extra.tx_type, typx))
@@ -538,12 +538,12 @@ pub const Table = struct {
                 return htype;
             },
             .vardef => {
-                const lhs = try self.eval(tree, tokens, source, node.extra.bin_op.lhs);
-                const rhs = try self.eval(tree, tokens, source, node.extra.bin_op.rhs);
+                const lhs = try self.eval(tree, tokens, node.extra.bin_op.lhs);
+                const rhs = try self.eval(tree, tokens, node.extra.bin_op.rhs);
 
-                const name = tokens.at(node.main+1).slice(source);
+                const name = tokens.slice(node.main+1);
                 const ltypx = self.inits.items[lhs].extra.tx_type;
-                const rtypx = try self.examine(tables, tree, tokens, source, node.extra.bin_op.rhs);
+                const rtypx = try self.examine(tables, tree, tokens, node.extra.bin_op.rhs);
 
                 if (!self.castable(ltypx, rtypx))
                     return error.FrameUncastableDef;
@@ -567,7 +567,7 @@ pub const Table = struct {
                 const stmts = tree.extras(node.extra);
 
                 for (stmts, 0..) |stmt, jdx| {
-                    const sdx = try table.examine(tables, tree, tokens, source, stmt);
+                    const sdx = try table.examine(tables, tree, tokens, stmt);
 
                     switch (table.types.items[sdx].kind) {
                         .tx_noreturn => {
@@ -589,8 +589,8 @@ pub const Table = struct {
                 return try self.pushTypx(typx);
             },
             .add, .sub, .mul, .div => {
-                const lhs = try self.examine(tables, tree, tokens, source, node.extra.bin_op.lhs);
-                const rhs = try self.examine(tables, tree, tokens, source, node.extra.bin_op.rhs);
+                const lhs = try self.examine(tables, tree, tokens, node.extra.bin_op.lhs);
+                const rhs = try self.examine(tables, tree, tokens, node.extra.bin_op.rhs);
 
                 const ltyp = self.types.items[lhs];
                 const rtyp = self.types.items[rhs];
@@ -604,7 +604,7 @@ pub const Table = struct {
                 return lhs;
             },
             .destroy => {
-                const rtype = try self.examine(tables, tree, tokens, source, node.extra.mon_op);
+                const rtype = try self.examine(tables, tree, tokens, node.extra.mon_op);
 
                 if (self.frame.return_type == 0)
                     return error.FrameNonDestroy;
@@ -618,7 +618,7 @@ pub const Table = struct {
                 const rtype = if (node.extra.mon_op == 0)
                     try self.pushTypx(.VOID)
                 else
-                    try self.examine(tables, tree, tokens, source, node.extra.mon_op);
+                    try self.examine(tables, tree, tokens, node.extra.mon_op);
 
                 if (self.frame.return_type == 0)
                     return error.FrameNonReturn;
@@ -633,14 +633,14 @@ pub const Table = struct {
     }
 
 
-    fn eval(self: *Table, tree: Ast, tokens: Tokens, source: [:0]const u8, idx: u32) Error!u32 {
+    fn eval(self: *Table, tree: Ast, tokens: Tokens, idx: u32) Error!u32 {
         const node = tree.nodes.items[idx];
 
         errdefer { if (error_idx == null) error_idx = idx; }
 
         switch (node.kind) {
             .integer => {
-                const slice = tokens.at(node.main).slice(source);
+                const slice = tokens.slice(node.main);
 
                 return try self.pushInit(.{
                     .kind = .integer,
@@ -650,7 +650,7 @@ pub const Table = struct {
             .identifier => {
                 //NOTE, linear types should be impossible here
                 //      since they aren't definable in the root frame
-                const slice = tokens.at(node.main).slice(source);
+                const slice = tokens.slice(node.main);
                 const symbol = self.table.get(slice) orelse return error.UnrecognizedIdentifier;
                 return if (symbol.init != 0) symbol.init else error.NonComptimeEval;
             },
@@ -666,7 +666,7 @@ pub const Table = struct {
                 for (mmbrs) |mmbr| {
                     try fields.append(
                         self.allocator,
-                        try self.eval(tree, tokens, source, mmbr)
+                        try self.eval(tree, tokens, mmbr)
                     );
 
                     try names.append(
@@ -712,7 +712,7 @@ pub const Table = struct {
 
                     try inits.append(
                         self.allocator,
-                        try self.eval(tree, tokens, source, mmbr)
+                        try self.eval(tree, tokens, mmbr)
                     );
                 }
 
@@ -739,11 +739,11 @@ pub const Table = struct {
     }
 };
 
-pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens, source: [:0]const u8) !Tables {
+pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens) !Tables {
     var tables = Tables.init(gpa);
     var table = try Table.init(gpa);
 
-    _ = try table.examine(&tables, tree, tokens, source, 0);
+    _ = try table.examine(&tables, tree, tokens, 0);
 
     try tables.put(0, table);
     return tables;

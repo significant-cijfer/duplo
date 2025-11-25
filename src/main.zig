@@ -69,9 +69,9 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     };
 
     defer tokens.deinit();
-    tokens.debug(source);
+    tokens.debug();
 
-    var tree = Parser.parse(gpa, &tokens, source) catch |err| {
+    var tree = Parser.parse(gpa, &tokens) catch |err| {
         const tdx = Parser.error_idx orelse return scream(err);
         const idx = tokens.at(tdx).idx;
 
@@ -79,9 +79,9 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     };
 
     defer tree.deinit();
-    tree.debug(tokens, source, 0, 0);
+    tree.debug(tokens, 0, 0);
 
-    var tables = Context.scan(gpa, tree, tokens, source) catch |err| {
+    var tables = Context.scan(gpa, tree, tokens) catch |err| {
         const ndx = Context.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
@@ -91,7 +91,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
 
     defer tables.deinit();
 
-    var graph = Flattener.flatten(gpa, tables, tree, tokens, source) catch |err| {
+    var graph = Flattener.flatten(gpa, tables, tree, tokens) catch |err| {
         const ndx = Flattener.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
@@ -100,7 +100,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     };
 
     defer graph.deinit();
-    graph.debug(tokens, source);
+    graph.debug(tokens);
 
     Generator.generate(.zig, writer, graph) catch |err| {
         return scream(err);
