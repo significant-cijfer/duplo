@@ -102,7 +102,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     defer graph.deinit();
     graph.debug(tokens);
 
-    Generator.generate(.zig, writer, graph) catch |err| {
+    Generator.generate(.zig, writer, graph, tokens) catch |err| {
         return scream(err);
     };
 }

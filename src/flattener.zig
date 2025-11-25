@@ -257,7 +257,7 @@ const Function = struct {
     root: u32,
 };
 
-const Block = struct {
+pub const Block = struct {
     idx: u32,
     len: u32,
     flow: Flow,
@@ -278,13 +278,14 @@ const Flow = struct {
         cond: Cond,
 
         const Cond = struct {
+            chs: u32,
             lhs: u32,
             rhs: u32,
         };
     };
 };
 
-const Inst = struct {
+pub const Inst = struct {
     kind: Kind,
     extra: Extra,
 
