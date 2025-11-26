@@ -11,6 +11,7 @@ const Flattener = @import("../flattener.zig");
 const Graph = Flattener.Graph;
 const Block = Flattener.Block;
 const Inst = Flattener.Inst;
+const Location = Graph.Location;
 
 pub fn gen(writer: *Writer, graph: Graph, tokens: Tokens) !void {
     for (graph.functions.items) |function| {
@@ -78,7 +79,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
 
         try writer.print("    .b{} => {{\n", .{bdx});
 
-        try genBlockBody(writer, tokens, insts);
+        try genBlockBody(writer, tokens, graph.locations.items, insts);
         try genBlockFlow(writer, block);
 
         try writer.print("    }},\n", .{});
@@ -96,9 +97,9 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
     try writer.print("  }}\n", .{});
 }
 
-fn genBlockBody(writer: *Writer, tokens: Tokens, insts: []Inst) !void {
+fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, insts: []Inst) !void {
     for (insts) |inst| switch (inst.kind) {
-        .set => try genInstSet(writer, tokens, inst),
+        .set => try genInstSet(writer, tokens, locations, inst),
         else => try writer.print("      // todo <{}>\n", .{inst.kind}),
     };
 }
@@ -113,9 +114,13 @@ fn genBlockFlow(writer: *Writer, block: Block) !void {
     }
 }
 
-fn genInstSet(writer: *Writer, tokens: Tokens, inst: Inst) !void {
-    const dst = inst.extra.mon_op.dst;
+fn genInstSet(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const loc = locations[inst.extra.mon_op.dst];
+    const dst = if (loc.main == 0)
+        "t?"
+    else
+        tokens.slice(loc.main);
     const src = tokens.slice(inst.extra.mon_op.src);
 
-    try writer.print("      let {{{}}} = {s};\n", .{dst, src});
+    try writer.print("      let {s} = {s};\n", .{dst, src});
 }

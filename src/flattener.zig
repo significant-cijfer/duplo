@@ -28,7 +28,8 @@ pub const Graph = struct {
     insts: ArrayList(Inst),
     scope: Scope,
 
-    const Location = struct {
+    pub const Location = struct {
+        main: u32,
         typx: Typx,
     };
 
@@ -59,9 +60,10 @@ pub const Graph = struct {
         return @intCast(idx);
     }
 
-    fn reserveLocation(self: *Graph, typx: Typx) !u32 {
+    fn reserveLocation(self: *Graph, main: ?u32, typx: Typx) !u32 {
         const idx = self.locations.items.len;
         try self.locations.append(self.allocator, .{
+            .main = main orelse 0,
             .typx = typx,
         });
         return @intCast(idx);
@@ -84,7 +86,7 @@ pub const Graph = struct {
                     block, _ = try self.flatten(tables, tree, tokens, idx, block, root);
                 }
 
-                return .{ block, try self.reserveLocation(.VOID) };
+                return .{ block, try self.reserveLocation(null, .VOID) };
             },
             .fdecl => {
                 const name = tokens.slice(node.main+1);
@@ -101,7 +103,7 @@ pub const Graph = struct {
                 return try self.flatten(tables, tree, tokens, idx, root, node.extra.fdecl.body);
             },
             .integer => {
-                const dst = try self.reserveLocation(.INTEGER);
+                const dst = try self.reserveLocation(null, .INTEGER);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .set,
@@ -118,7 +120,7 @@ pub const Graph = struct {
                 const symb = table.get(name).?;
                 const typx = table.types.items[symb.typx];
 
-                const dst = try self.reserveLocation(typx);
+                const dst = try self.reserveLocation(null, typx);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .load,
@@ -131,14 +133,14 @@ pub const Graph = struct {
                 return .{ block, dst };
             },
             .vardef => {
-                if (self.scope == .root) return .{ block, try self.reserveLocation(.VOID) };
+                if (self.scope == .root) return .{ block, try self.reserveLocation(null, .VOID) };
 
                 const name = tokens.slice(node.main+1);
                 const symb = table.get(name).?;
                 const typx = table.types.items[symb.typx];
 
                 block, const src = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.rhs);
-                const dst = try self.reserveLocation(typx);
+                const dst = try self.reserveLocation(node.main+1, typx);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .store,
@@ -157,14 +159,14 @@ pub const Graph = struct {
                     block, _ = try self.flatten(tables, tree, tokens, idx, block, stmt);
                 }
 
-                return .{ block, try self.reserveLocation(.VOID) };
+                return .{ block, try self.reserveLocation(null, .VOID) };
             },
             .add, .sub, .mul, .div => {
                 block, const lhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.lhs);
                 block, const rhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.rhs);
 
                 const loct = self.locations.items[lhs];
-                const dst = try self.reserveLocation(loct.typx);
+                const dst = try self.reserveLocation(null, loct.typx);
 
                 const kind: Inst.Kind = switch (node.kind) {
                     .add => .add,
@@ -187,7 +189,7 @@ pub const Graph = struct {
             },
             .ret => {
                 block, const src = try self.flatten(tables, tree, tokens, tdx, block, node.extra.mon_op);
-                const dst = try self.reserveLocation(.NORETURN);
+                const dst = try self.reserveLocation(null, .NORETURN);
 
                 const rdx: u32 = self.blocks.items[bdx].idx;
                 const len: u32 = @intCast(self.insts.items.len);
