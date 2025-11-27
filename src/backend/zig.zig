@@ -13,6 +13,22 @@ const Block = Flattener.Block;
 const Inst = Flattener.Inst;
 const Location = Graph.Location;
 
+const GenLocation = struct {
+    locations: []Location,
+    tokens: Tokens,
+    main: u32,
+
+    pub fn format(
+        self: GenLocation,
+        writer: *std.Io.Writer,
+    ) !void {
+        if (self.locations[self.main].main == 0)
+            try writer.print("t{}", .{self.main})
+        else
+            try writer.print("{s}", .{self.tokens.slice(self.locations[self.main].main)});
+    }
+};
+
 pub fn gen(writer: *Writer, graph: Graph, tokens: Tokens) !void {
     for (graph.functions.items) |function| {
         // prologue
@@ -100,6 +116,10 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
 fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, insts: []Inst) !void {
     for (insts) |inst| switch (inst.kind) {
         .set => try genInstSet(writer, tokens, locations, inst),
+        .add => try genInstAdd(writer, tokens, locations, inst),
+        .sub => try genInstSub(writer, tokens, locations, inst),
+        .mul => try genInstMul(writer, tokens, locations, inst),
+        .div => try genInstDiv(writer, tokens, locations, inst),
         else => try writer.print("      // todo <{}>\n", .{inst.kind}),
     };
 }
@@ -115,12 +135,59 @@ fn genBlockFlow(writer: *Writer, block: Block) !void {
 }
 
 fn genInstSet(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
-    const loc = locations[inst.extra.mon_op.dst];
-    const dst = if (loc.main == 0)
-        "t?"
-    else
-        tokens.slice(loc.main);
     const src = tokens.slice(inst.extra.mon_op.src);
 
-    try writer.print("      let {s} = {s};\n", .{dst, src});
+    const gloc = GenLocation{
+        .locations = locations,
+        .tokens = tokens,
+        .main = inst.extra.mon_op.dst,
+    };
+
+    try writer.print("      let {f} = {s};\n", .{gloc, src});
+}
+
+fn genInstAdd(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const dst = GenLocation{
+        .locations = locations,
+        .tokens = tokens,
+        .main = inst.extra.bin_op.dst,
+    };
+
+    const lhs = GenLocation{
+        .locations = locations,
+        .tokens = tokens,
+        .main = inst.extra.bin_op.lhs,
+    };
+
+    const rhs = GenLocation{
+        .locations = locations,
+        .tokens = tokens,
+        .main = inst.extra.bin_op.rhs,
+    };
+
+    try writer.print("      let {f} = {f} + {f};\n", .{dst, lhs, rhs});
+}
+
+fn genInstSub(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.dst };
+    const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
+    const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
+
+    try writer.print("      let {f} = {f} - {f};\n", .{dst, lhs, rhs});
+}
+
+fn genInstMul(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.dst };
+    const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
+    const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
+
+    try writer.print("      let {f} = {f} * {f};\n", .{dst, lhs, rhs});
+}
+
+fn genInstDiv(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.dst };
+    const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
+    const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
+
+    try writer.print("      let {f} = {f} / {f};\n", .{dst, lhs, rhs});
 }
