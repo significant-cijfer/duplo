@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const log = std.log;
 const cwd = std.fs.cwd;
@@ -17,8 +18,16 @@ const Generator = @import("generator.zig");
 // None :)
 
 pub fn main() void {
-    var dbg = std.heap.DebugAllocator(.{}).init;
-    const gpa = dbg.allocator();
+    const gpa = switch (builtin.mode) {
+        .Debug => b: {
+            var dbg = std.heap.DebugAllocator(.{}).init;
+            break :b dbg.allocator();
+        },
+        .ReleaseSafe,
+        .ReleaseFast,
+        .ReleaseSmall => std.heap.smp_allocator,
+    };
+
 
     var args = std.process.argsWithAllocator(gpa)
         catch return log.err("Couldn't allocate space for argv", .{});
@@ -62,14 +71,17 @@ fn scream(err: anyerror) void {
 }
 
 fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
+    var timer = std.time.Timer.start()
+        catch return scream(error.NoTimer);
+
     var tokens = Lexer.lex(gpa, source) catch |err| {
         const idx = Lexer.error_idx orelse return scream(err);
 
         return complain(source, err, idx);
     };
 
+    const lap_tokens = timer.lap();
     defer tokens.deinit();
-    tokens.debug();
 
     var tree = Parser.parse(gpa, &tokens) catch |err| {
         const tdx = Parser.error_idx orelse return scream(err);
@@ -78,8 +90,8 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
         return complain(source, err, idx);
     };
 
+    const lap_tree = timer.lap();
     defer tree.deinit();
-    tree.debug(tokens, 0, 0);
 
     var tables = Context.scan(gpa, tree, tokens) catch |err| {
         const ndx = Context.error_idx orelse return scream(err);
@@ -89,6 +101,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
         return complain(source, err, idx);
     };
 
+    const lap_tables = timer.lap();
     defer tables.deinit();
 
     var graph = Flattener.flatten(gpa, tables, tree, tokens) catch |err| {
@@ -99,10 +112,19 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
         return complain(source, err, idx);
     };
 
+    const lap_graph = timer.lap();
     defer graph.deinit();
-    graph.debug(tokens);
 
     Generator.generate(.zig, writer, graph, tables, tokens) catch |err| {
         return scream(err);
     };
+
+    const lap_gen = timer.lap();
+
+    std.debug.print("tokens: {}ns\n", .{lap_tokens});
+    std.debug.print("tree:   {}ns\n", .{lap_tree});
+    std.debug.print("tables: {}ns\n", .{lap_tables});
+    std.debug.print("graph:  {}ns\n", .{lap_graph});
+    std.debug.print("gen:    {}ns\n", .{lap_gen});
+    std.debug.print("total:  {}ns\n", .{lap_tokens + lap_tree + lap_tables + lap_graph + lap_gen});
 }
