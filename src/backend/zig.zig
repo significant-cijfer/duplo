@@ -85,7 +85,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
 
     try queue.append(gpa, root);
 
-    try writer.print("  block: switch (Block.b{}) {{\n", .{root});
+    try writer.print("  return block: switch (Block.b{}) {{\n", .{root});
 
     while (queue.pop()) |bdx| {
         const block = graph.blocks.items[bdx];
@@ -96,7 +96,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
         try writer.print("    .b{} => {{\n", .{bdx});
 
         try genBlockBody(writer, tokens, graph.locations.items, insts);
-        try genBlockFlow(writer, block);
+        try genBlockFlow(writer, tokens, graph.locations.items, block);
 
         try writer.print("    }},\n", .{});
 
@@ -110,7 +110,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
         }
     }
 
-    try writer.print("  }}\n", .{});
+    try writer.print("  }};\n", .{});
 }
 
 fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, insts: []Inst) !void {
@@ -124,48 +124,38 @@ fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, insts: [
     };
 }
 
-fn genBlockFlow(writer: *Writer, block: Block) !void {
+fn genBlockFlow(writer: *Writer, tokens: Tokens, locations: []Location, block: Block) !void {
     const flow = block.flow;
+
+    const main = switch (flow.kind) {
+        .jmp => undefined,
+        .jnz => flow.extra.cond.chs,
+        .ret => flow.extra.mono,
+    };
+
+    const gloc = GenLocation{ .locations = locations, .tokens = tokens, .main = main };
 
     switch (flow.kind) {
         .jmp => try writer.print("      continue :block .b{}\n", .{flow.extra.mono}),
-        .jnz => try writer.print("      if ({{{}}}) continue :block .b{} else continue :block .b{}\n", .{flow.extra.cond.chs, flow.extra.cond.lhs, flow.extra.cond.rhs}),
-        .ret => try writer.print("      return {{{}}};\n", .{flow.extra.mono}),
+        .jnz => try writer.print("      if ({f}) continue :block .b{} else continue :block .b{}\n", .{gloc, flow.extra.cond.lhs, flow.extra.cond.rhs}),
+        .ret => try writer.print("      break :block {f};\n", .{gloc}),
     }
 }
 
 fn genInstSet(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
-    const src = tokens.slice(inst.extra.mon_op.src);
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.mon_op.dst };
+    const src = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.mon_op.src };
 
-    const gloc = GenLocation{
-        .locations = locations,
-        .tokens = tokens,
-        .main = inst.extra.mon_op.dst,
-    };
-
-    try writer.print("      let {f} = {s};\n", .{gloc, src});
+    try writer.print("      const {f} = {f};\n", .{dst, src});
 }
 
 fn genInstAdd(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
-    const dst = GenLocation{
-        .locations = locations,
-        .tokens = tokens,
-        .main = inst.extra.bin_op.dst,
-    };
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.dst };
+    const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
+    const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
 
-    const lhs = GenLocation{
-        .locations = locations,
-        .tokens = tokens,
-        .main = inst.extra.bin_op.lhs,
-    };
 
-    const rhs = GenLocation{
-        .locations = locations,
-        .tokens = tokens,
-        .main = inst.extra.bin_op.rhs,
-    };
-
-    try writer.print("      let {f} = {f} + {f};\n", .{dst, lhs, rhs});
+    try writer.print("      const {f} = {f} + {f};\n", .{dst, lhs, rhs});
 }
 
 fn genInstSub(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
@@ -173,7 +163,7 @@ fn genInstSub(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst
     const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
     const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
 
-    try writer.print("      let {f} = {f} - {f};\n", .{dst, lhs, rhs});
+    try writer.print("      const {f} = {f} - {f};\n", .{dst, lhs, rhs});
 }
 
 fn genInstMul(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
@@ -181,7 +171,7 @@ fn genInstMul(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst
     const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
     const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
 
-    try writer.print("      let {f} = {f} * {f};\n", .{dst, lhs, rhs});
+    try writer.print("      const {f} = {f} * {f};\n", .{dst, lhs, rhs});
 }
 
 fn genInstDiv(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
@@ -189,5 +179,5 @@ fn genInstDiv(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst
     const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
     const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
 
-    try writer.print("      let {f} = {f} / {f};\n", .{dst, lhs, rhs});
+    try writer.print("      const {f} = {f} / {f};\n", .{dst, lhs, rhs});
 }

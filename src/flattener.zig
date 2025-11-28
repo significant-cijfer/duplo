@@ -104,12 +104,13 @@ pub const Graph = struct {
             },
             .integer => {
                 const dst = try self.reserveLocation(null, .INTEGER);
+                const src = try self.reserveLocation(node.main, .INTEGER);
 
                 try self.insts.append(self.allocator, .{
                     .kind = .set,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
-                        .src = node.main
+                        .src = src
                     }},
                 });
 
@@ -121,12 +122,13 @@ pub const Graph = struct {
                 const typx = table.types.items[symb.typx];
 
                 const dst = try self.reserveLocation(null, typx);
+                const src = try self.reserveLocation(node.main, .INTEGER);
 
                 try self.insts.append(self.allocator, .{
-                    .kind = .load,
+                    .kind = .set,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
-                        .src = node.main
+                        .src = src
                     }},
                 });
 
@@ -143,7 +145,7 @@ pub const Graph = struct {
                 const dst = try self.reserveLocation(node.main+1, typx);
 
                 try self.insts.append(self.allocator, .{
-                    .kind = .store,
+                    .kind = .set,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
                         .src = src,
