@@ -224,6 +224,24 @@ pub const Table = struct {
         _ = try table.pushTypx(.VOID);
         _ = try table.pushInit(undefined);
 
+        try table.put("u8", .{
+            .storage = .none,
+            .typx = try table.pushTypx(.{
+                .kind = .tx_type,
+                .extra = .{ .none = undefined },
+            }),
+            .init = try table.pushInit(.{
+                .kind = .tx_type,
+                .extra = .{ .tx_type = try table.pushTypx(.{
+                    .kind = .integer,
+                    .extra = .{ .integer = .{
+                        .sign = false,
+                        .bits = 8,
+                    }},
+                })},
+            }),
+        });
+
         try table.put("i32", .{
             .storage = .none,
             .typx = try table.pushTypx(.{

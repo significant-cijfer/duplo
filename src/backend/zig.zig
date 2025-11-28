@@ -7,6 +7,10 @@ const AutoHashMap = std.AutoHashMap;
 const Lexer = @import("../lexer.zig");
 const Tokens = Lexer.Tokens;
 
+const Context = @import("../context.zig");
+const Tables = Context.Tables;
+const Table = Context.Table;
+
 const Flattener = @import("../flattener.zig");
 const Graph = Flattener.Graph;
 const Block = Flattener.Block;
@@ -29,10 +33,56 @@ const GenLocation = struct {
     }
 };
 
-pub fn gen(writer: *Writer, graph: Graph, tokens: Tokens) !void {
+const GenTypx = struct {
+    table: Table,
+    tokens: Tokens,
+    typx: u32,
+    name: ?[]const u8, //NOTE, for .function kind
+
+    pub fn format(
+        self: GenTypx,
+        writer: *std.Io.Writer,
+    ) !void {
+        const typx = self.table.types.items[self.typx];
+
+        switch (typx.kind) {
+            .integer => {
+                const sign = if (typx.extra.integer.sign) "i" else "u";
+                const bits = typx.extra.integer.bits;
+
+                try writer.print("{s}{}", .{sign, bits});
+            },
+            .function => {
+                try writer.print("fn {s}(", .{self.name orelse ""});
+
+                const proto = typx.extra.function;
+                const names = self.table.extra.items[proto.names..proto.names+proto.plen];
+                const prms = self.table.extra.items[proto.prms..proto.prms+proto.plen];
+
+                for (names, prms) |name, prm| {
+                    const pname = self.tokens.slice(name);
+                    const gtypx = GenTypx{ .table = self.table, .tokens = self.tokens, .typx = prm, .name = null };
+
+                    try writer.print("{s}: {f}, ", .{pname, gtypx});
+                }
+
+                const gtypx = GenTypx{ .table = self.table, .tokens = self.tokens, .typx = proto.rtyp, .name = null };
+                try writer.print(") {f}", .{gtypx});
+            },
+            else => std.debug.panic("TODO: {}", .{typx.kind}),
+        }
+    }
+};
+
+pub fn gen(writer: *Writer, graph: Graph, tables: Tables, tokens: Tokens) !void {
     for (graph.functions.items) |function| {
         // prologue
-        try writer.print("fn {s}() <void> {{\n", .{function.name});
+        const table = tables.get(function.table).?;
+        const symbl = table.get(function.name).?;
+        const gtypx = GenTypx{ .table = table, .tokens = tokens, .typx = symbl.typx, .name = function.name };
+
+        //TODO, only print pub when the corresponding attr is set
+        try writer.print("pub {f} {{\n", .{gtypx});
 
         try genFunctionStates(writer, graph, function.root);
         try genFunctionSwitch(writer, graph, tokens, function.root);

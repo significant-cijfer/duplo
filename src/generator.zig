@@ -5,6 +5,9 @@ const Writer = std.Io.Writer;
 const Lexer = @import("lexer.zig");
 const Tokens = Lexer.Tokens;
 
+const Context = @import("context.zig");
+const Tables = Context.Tables;
+
 const Flattener = @import("flattener.zig");
 const Graph = Flattener.Graph;
 
@@ -14,8 +17,8 @@ const Target = enum {
     zig,
 };
 
-pub fn generate(target: Target, writer: *Writer, graph: Graph, tokens: Tokens) !void {
+pub fn generate(target: Target, writer: *Writer, graph: Graph, tables: Tables, tokens: Tokens) !void {
     return switch (target) {
-        .zig => backend_zig.gen(writer, graph, tokens),
+        .zig => backend_zig.gen(writer, graph, tables, tokens),
     };
 }

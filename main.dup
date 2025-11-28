@@ -12,6 +12,10 @@ fn f(x: i32) i32, {
     return x + y;
 };
 
+fn main() u8, {
+    return 67;
+};
+
 //let x: type = struct linear {
 //    a: i32,
 //    b: i32

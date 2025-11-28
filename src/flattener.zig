@@ -98,6 +98,8 @@ pub const Graph = struct {
                 try self.functions.append(self.allocator, .{
                     .name = name,
                     .root = root,
+                    .table = idx,
+                    .proto = node.extra.fdecl.proto,
                 });
 
                 return try self.flatten(tables, tree, tokens, idx, root, node.extra.fdecl.body);
@@ -237,6 +239,8 @@ pub const Graph = struct {
 const Function = struct {
     name: []const u8,
     root: u32,
+    table: u32,
+    proto: u32,
 };
 
 pub const Block = struct {
