@@ -103,36 +103,14 @@ pub const Graph = struct {
                 return try self.flatten(tables, tree, tokens, idx, root, node.extra.fdecl.body);
             },
             .integer => {
-                const dst = try self.reserveLocation(null, .INTEGER);
-                const src = try self.reserveLocation(node.main, .INTEGER);
-
-                try self.insts.append(self.allocator, .{
-                    .kind = .set,
-                    .extra = .{ .mon_op = .{
-                        .dst = dst,
-                        .src = src
-                    }},
-                });
-
-                return .{ block, dst };
+                return .{ block, try self.reserveLocation(node.main, .INTEGER) };
             },
             .identifier => {
                 const name = tokens.slice(node.main);
                 const symb = table.get(name).?;
                 const typx = table.types.items[symb.typx];
 
-                const dst = try self.reserveLocation(null, typx);
-                const src = try self.reserveLocation(node.main, .INTEGER);
-
-                try self.insts.append(self.allocator, .{
-                    .kind = .set,
-                    .extra = .{ .mon_op = .{
-                        .dst = dst,
-                        .src = src
-                    }},
-                });
-
-                return .{ block, dst };
+                return .{ block, try self.reserveLocation(node.main, typx) };
             },
             .vardef => {
                 if (self.scope == .root) return .{ block, try self.reserveLocation(null, .VOID) };
