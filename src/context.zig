@@ -23,6 +23,8 @@ const Error = error {
     NonInitializedStructField,
     NonStructStructLitHead,
     NonCastableStructLit,
+    NonFunctionFunctionCall,
+    NonCastableFunctionArg,
     UnrecognizedIdentifier,
     UnhandledExamination,
     FrameNonDestroyedLinearInstance,
@@ -447,6 +449,12 @@ pub const Table = struct {
                 const rtype = table.types.items[proto].extra.function.rtyp;
                 table.frame.return_type = rtype;
 
+                try self.put(slice, .{
+                    .storage = .public,
+                    .typx = proto,
+                    .init = 0,
+                });
+
                 try table.put(slice, .{
                     .storage = .public,
                     .typx = proto,
@@ -495,6 +503,27 @@ pub const Table = struct {
                         .rtyp = rtype,
                     } },
                 });
+            },
+            .fcall => {
+                const typx = try self.examine(tables, tree, tokens, node.extra.fcall.func);
+                const proto = self.types.items[typx];
+
+                if (proto.kind != .function)
+                    return error.NonFunctionFunctionCall;
+
+                const list = tree.nodes.items[node.extra.fcall.args];
+                const args = tree.extras(list.extra);
+                const prms = proto.extra.function.prms;
+                const plen = proto.extra.function.plen;
+
+                for (self.extras(prms, plen), args) |prm, arg| {
+                    const atyp = try self.examine(tables, tree, tokens, arg);
+
+                    if (!self.castable(prm, atyp))
+                        return error.NonCastableFunctionArg;
+                }
+
+                return proto.extra.function.rtyp;
             },
             .integer => {
                 return try self.pushTypx(.INTEGER);

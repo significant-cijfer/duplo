@@ -26,6 +26,7 @@ pub const Graph = struct {
     locations: ArrayList(Location),
     blocks: ArrayList(Block),
     insts: ArrayList(Inst),
+    extra: ArrayList(u32),
     scope: Scope,
 
     pub const Location = struct {
@@ -103,6 +104,36 @@ pub const Graph = struct {
                 });
 
                 return try self.flatten(tables, tree, tokens, idx, root, node.extra.fdecl.body);
+            },
+            .fcall => {
+                block, const func = try self.flatten(tables, tree, tokens, tdx, block, node.extra.fcall.func);
+
+                const fun = self.locations.items[func];
+                const dst = try self.reserveLocation(null, fun.typx);
+
+                const list = tree.nodes.items[node.extra.fcall.args];
+                const args = tree.extras(list.extra);
+
+                const off = self.extra.items.len;
+                const len = args.len;
+
+                for (args) |arg| {
+                    block, const loc = try self.flatten(tables, tree, tokens, tdx, block, arg);
+
+                    try self.extra.append(self.allocator, loc);
+                }
+
+                try self.insts.append(self.allocator, .{
+                    .kind = .call,
+                    .extra = .{ .call = .{
+                        .dst = dst,
+                        .func = func,
+                        .args = @intCast(off),
+                        .len = @intCast(len),
+                    }},
+                });
+
+                return .{ block, dst };
             },
             .integer => {
                 return .{ block, try self.reserveLocation(node.main, .INTEGER) };
@@ -218,6 +249,11 @@ pub const Graph = struct {
                     inst.extra.bin_op.lhs,
                     inst.extra.bin_op.rhs,
                 }),
+                .call => std.log.info("  {any}:  {{{}}} = {{{}}}", .{
+                    inst.kind,
+                    inst.extra.call.dst,
+                    inst.extra.call.func,
+                }),
             };
 
             switch (block.flow.kind) {
@@ -283,11 +319,13 @@ pub const Inst = struct {
         sub,
         mul,
         div,
+        call,
     };
 
     const Extra = union {
         mon_op: MonOp,
         bin_op: BinOp,
+        call: Call,
 
         const MonOp = struct {
             dst: u32,
@@ -299,6 +337,13 @@ pub const Inst = struct {
             lhs: u32,
             rhs: u32,
         };
+
+        const Call = struct {
+            dst: u32,
+            func: u32,
+            args: u32,
+            len: u32,
+        };
     };
 };
 
@@ -309,6 +354,7 @@ pub fn flatten(gpa: Allocator, tables: Tables, tree: Ast, tokens: Tokens) !Graph
         .locations = .empty,
         .blocks = .empty,
         .insts = .empty,
+        .extra = .empty,
         .scope = .root,
     };
 

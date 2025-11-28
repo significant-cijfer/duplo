@@ -145,7 +145,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
 
         try writer.print("    .b{} => {{\n", .{bdx});
 
-        try genBlockBody(writer, tokens, graph.locations.items, insts);
+        try genBlockBody(writer, tokens, graph.locations.items, graph.extra.items, insts);
         try genBlockFlow(writer, tokens, graph.locations.items, block);
 
         try writer.print("    }},\n", .{});
@@ -163,13 +163,14 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
     try writer.print("  }};\n", .{});
 }
 
-fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, insts: []Inst) !void {
+fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, extras: []u32, insts: []Inst) !void {
     for (insts) |inst| switch (inst.kind) {
         .set => try genInstSet(writer, tokens, locations, inst),
         .add => try genInstAdd(writer, tokens, locations, inst),
         .sub => try genInstSub(writer, tokens, locations, inst),
         .mul => try genInstMul(writer, tokens, locations, inst),
         .div => try genInstDiv(writer, tokens, locations, inst),
+        .call => try genInstCall(writer, tokens, locations, extras, inst),
         else => try writer.print("      // todo <{}>\n", .{inst.kind}),
     };
 }
@@ -230,4 +231,21 @@ fn genInstDiv(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst
     const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
 
     try writer.print("      const {f} = {f} / {f};\n", .{dst, lhs, rhs});
+}
+
+fn genInstCall(writer: *Writer, tokens: Tokens, locations: []Location, extras: []u32, inst: Inst) !void {
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.call.dst };
+    const fun = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.call.func };
+
+    const args = extras[inst.extra.call.args..inst.extra.call.args+inst.extra.call.len];
+
+    try writer.print("      const {f} = {f}(", .{dst, fun});
+
+    for (args) |arg| {
+        const aloc = GenLocation{ .locations = locations, .tokens = tokens, .main = arg };
+
+        try writer.print("{f}, ", .{aloc});
+    }
+
+    try writer.print(");\n", .{});
 }

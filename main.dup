@@ -12,8 +12,12 @@ fn f(x: i32) i32, {
     return x + y;
 };
 
+fn ggez(x: u8) u8, {
+    return x * 10;
+};
+
 fn main() u8, {
-    return 67;
+    return ggez(6) + 7;
 };
 
 //let x: type = struct linear {
