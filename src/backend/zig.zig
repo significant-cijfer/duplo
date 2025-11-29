@@ -119,6 +119,8 @@ fn genFunctionStates(writer: *Writer, graph: Graph, root: u32) !void {
             },
             .ret => {},
         }
+
+        try visited.put(bdx, {});
     }
 
     try writer.print("  }};\n", .{});
@@ -158,6 +160,8 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
             },
             .ret => {},
         }
+
+        try visited.put(bdx, {});
     }
 
     try writer.print("  }};\n", .{});
@@ -187,8 +191,8 @@ fn genBlockFlow(writer: *Writer, tokens: Tokens, locations: []Location, block: B
     const gloc = GenLocation{ .locations = locations, .tokens = tokens, .main = main };
 
     switch (flow.kind) {
-        .jmp => try writer.print("      continue :block .b{}\n", .{flow.extra.mono}),
-        .jnz => try writer.print("      if ({f}) continue :block .b{} else continue :block .b{}\n", .{gloc, flow.extra.cond.lhs, flow.extra.cond.rhs}),
+        .jmp => try writer.print("      continue :block .b{};\n", .{flow.extra.mono}),
+        .jnz => try writer.print("      if ({f} != 0) continue :block .b{} else continue :block .b{};\n", .{gloc, flow.extra.cond.lhs, flow.extra.cond.rhs}),
         .ret => try writer.print("      break :block {f};\n", .{gloc}),
     }
 }

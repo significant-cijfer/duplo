@@ -25,6 +25,8 @@ const Error = error {
     NonCastableStructLit,
     NonFunctionFunctionCall,
     NonCastableFunctionArg,
+    NonCastableTernaryCond,
+    NonCastableTernaryBranch,
     UnrecognizedIdentifier,
     UnhandledExamination,
     FrameNonDestroyedLinearInstance,
@@ -350,6 +352,15 @@ pub const Table = struct {
         };
     }
 
+    fn isInteger(self: *const Table, typx: u32) bool {
+        const item = self.types.items[typx];
+        return switch (item.kind) {
+            .ct_integer => true,
+            .integer => true,
+            else => false,
+        };
+    }
+
     //NOTE, rhs has to "transform" into lhs
     fn castable(self: *const Table, lhs: u32, rhs: u32) bool {
         const ltyp = self.types.items[lhs];
@@ -650,6 +661,19 @@ pub const Table = struct {
 
                 return lhs;
             },
+            .ternary => {
+                const chs = try self.examine(tables, tree, tokens, node.extra.tri_op.lhs);
+                const lhs = try self.examine(tables, tree, tokens, node.extra.tri_op.mhs+0);
+                const rhs = try self.examine(tables, tree, tokens, node.extra.tri_op.mhs+1);
+
+                if (!self.isInteger(chs))
+                    return error.NonCastableTernaryCond;
+
+                if (!self.castable(lhs, rhs))
+                    return error.NonCastableTernaryBranch;
+
+                return lhs;
+            },
             .destroy => {
                 const rtype = try self.examine(tables, tree, tokens, node.extra.mon_op);
 
@@ -778,9 +802,8 @@ pub const Table = struct {
             .add,
             .sub,
             .mul,
-            .div => {
-                return 0;
-            },
+            .div => return 0,
+            .ternary => return 0,
             else => return error.UnhandledEval,
         }
     }

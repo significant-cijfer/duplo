@@ -200,6 +200,74 @@ pub const Graph = struct {
 
                 return .{ block, dst };
             },
+            .ternary => {
+                const dst = try self.reserveLocation(null, undefined);
+
+                /////
+                block, const chs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.lhs);
+                const cbdx = block;
+
+                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
+                /////
+
+
+                /////
+                block = try self.reserveBlock();
+                block, const lhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.mhs+0);
+                const lbdx = block;
+
+                try self.insts.append(self.allocator, .{
+                    .kind = .set,
+                    .extra = .{ .mon_op = .{
+                        .dst = dst,
+                        .src = lhs,
+                    }},
+                });
+
+                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
+                /////
+
+
+                /////
+                block = try self.reserveBlock();
+                block, const rhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.mhs+1);
+                const rbdx = block;
+
+                try self.insts.append(self.allocator, .{
+                    .kind = .set,
+                    .extra = .{ .mon_op = .{
+                        .dst = dst,
+                        .src = rhs,
+                    }},
+                });
+
+                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
+                /////
+
+
+                block = try self.reserveBlock();
+
+                self.blocks.items[cbdx].flow = .{
+                    .kind = .jnz,
+                    .extra = .{ .cond = .{
+                        .chs = chs,
+                        .lhs = lbdx,
+                        .rhs = rbdx,
+                    }},
+                };
+
+                self.blocks.items[lbdx].flow = .{
+                    .kind = .jmp,
+                    .extra = .{ .mono = block },
+                };
+
+                self.blocks.items[rbdx].flow = .{
+                    .kind = .jmp,
+                    .extra = .{ .mono = block },
+                };
+
+                return .{ block, dst };
+            },
             .ret => {
                 block, const src = try self.flatten(tables, tree, tokens, tdx, block, node.extra.mon_op);
                 const dst = try self.reserveLocation(null, .NORETURN);
