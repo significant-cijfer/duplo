@@ -151,7 +151,7 @@ pub const Ast = struct {
     }
 };
 
-const Node = struct {
+pub const Node = struct {
     main: u32,
     kind: Kind,
     extra: Extra,

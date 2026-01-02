@@ -39,6 +39,28 @@ pub const Graph = struct {
         function,
     };
 
+    //NOTE, I dont like this struct at all
+    //      It rly bothers me, but atp I just want this feature to be finished
+    const Locals = struct {
+        allocator: Allocator,
+        list: *ArrayList(u32),
+
+        fn reserve(self: Locals, local: u32) !void {
+            try self.list.append(self.allocator, local);
+        }
+
+        fn inject(self: Locals, graph: *Graph) !u32 {
+            defer self.list.deinit(self.allocator);
+
+            const idx = graph.extra.items.len;
+
+            try graph.extra.append(graph.allocator, @intCast(self.list.items.len));
+            try graph.extra.appendSlice(graph.allocator, self.list.items);
+
+            return @intCast(idx);
+        }
+    };
+
     //NOTE, its not possible to destructure structs with named fields
     //      so we define a tuple here
     const Flat = struct {
@@ -70,7 +92,7 @@ pub const Graph = struct {
         return @intCast(idx);
     }
 
-    fn flatten(self: *Graph, tables: Tables, tree: Ast, tokens: Tokens, tdx: u32, bdx: u32, idx: u32) !Flat {
+    fn flatten(self: *Graph, tables: Tables, tree: Ast, tokens: Tokens, locals: Locals, tdx: u32, bdx: u32, idx: u32) !Flat {
         const table = tables.get(tdx).?;
         const node = tree.nodes.items[idx];
         var block = bdx;
@@ -84,7 +106,7 @@ pub const Graph = struct {
                 for (roots) |root| {
                     //NOTE, block reassignment is technically useless here
                     //      but it feels nice to do it anyway
-                    block, _ = try self.flatten(tables, tree, tokens, idx, block, root);
+                    block, _ = try self.flatten(tables, tree, tokens, locals, idx, block, root);
                 }
 
                 return .{ block, try self.reserveLocation(null, .VOID) };
@@ -96,17 +118,27 @@ pub const Graph = struct {
                 self.scope = .function;
                 defer self.scope = .root;
 
+                var list = ArrayList(u32).empty;
+
+                const ls = Locals{
+                    .allocator = self.allocator,
+                    .list = &list,
+                };
+
+                block, const bdy = try self.flatten(tables, tree, tokens, ls, idx, root, node.extra.fdecl.body);
+
                 try self.functions.append(self.allocator, .{
                     .name = name,
                     .root = root,
                     .table = idx,
                     .proto = node.extra.fdecl.proto,
+                    .locals = try ls.inject(self),
                 });
 
-                return try self.flatten(tables, tree, tokens, idx, root, node.extra.fdecl.body);
+                return .{ block, bdy };
             },
             .fcall => {
-                block, const func = try self.flatten(tables, tree, tokens, tdx, block, node.extra.fcall.func);
+                block, const func = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.fcall.func);
 
                 const fun = self.locations.items[func];
                 const dst = try self.reserveLocation(null, fun.typx);
@@ -118,7 +150,7 @@ pub const Graph = struct {
                 const len = args.len;
 
                 for (args) |arg| {
-                    block, const loc = try self.flatten(tables, tree, tokens, tdx, block, arg);
+                    block, const loc = try self.flatten(tables, tree, tokens, locals, tdx, block, arg);
 
                     try self.extra.append(self.allocator, loc);
                 }
@@ -152,7 +184,7 @@ pub const Graph = struct {
                 const symb = table.get(name).?;
                 const typx = table.types.items[symb.typx];
 
-                block, const src = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.rhs);
+                block, const src = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.rhs);
                 const dst = try self.reserveLocation(node.main+1, typx);
 
                 try self.insts.append(self.allocator, .{
@@ -169,14 +201,14 @@ pub const Graph = struct {
                 const stmts = tree.extras(node.extra);
 
                 for (stmts) |stmt| {
-                    block, _ = try self.flatten(tables, tree, tokens, idx, block, stmt);
+                    block, _ = try self.flatten(tables, tree, tokens, locals, idx, block, stmt);
                 }
 
                 return .{ block, try self.reserveLocation(null, .VOID) };
             },
             .add, .sub, .mul, .div => {
-                block, const lhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.lhs);
-                block, const rhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.bin_op.rhs);
+                block, const lhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.lhs);
+                block, const rhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.rhs);
 
                 const loct = self.locations.items[lhs];
                 const dst = try self.reserveLocation(null, loct.typx);
@@ -202,9 +234,10 @@ pub const Graph = struct {
             },
             .ternary => {
                 const dst = try self.reserveLocation(null, undefined);
+                try locals.reserve(dst);
 
                 /////
-                block, const chs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.lhs);
+                block, const chs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.lhs);
                 const cbdx = block;
 
                 self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
@@ -213,11 +246,11 @@ pub const Graph = struct {
 
                 /////
                 block = try self.reserveBlock();
-                block, const lhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.mhs+0);
+                block, const lhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.mhs+0);
                 const lbdx = block;
 
                 try self.insts.append(self.allocator, .{
-                    .kind = .set,
+                    .kind = .store,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
                         .src = lhs,
@@ -230,11 +263,11 @@ pub const Graph = struct {
 
                 /////
                 block = try self.reserveBlock();
-                block, const rhs = try self.flatten(tables, tree, tokens, tdx, block, node.extra.tri_op.mhs+1);
+                block, const rhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.mhs+1);
                 const rbdx = block;
 
                 try self.insts.append(self.allocator, .{
-                    .kind = .set,
+                    .kind = .store,
                     .extra = .{ .mon_op = .{
                         .dst = dst,
                         .src = rhs,
@@ -269,7 +302,7 @@ pub const Graph = struct {
                 return .{ block, dst };
             },
             .ret => {
-                block, const src = try self.flatten(tables, tree, tokens, tdx, block, node.extra.mon_op);
+                block, const src = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.mon_op);
                 const dst = try self.reserveLocation(null, .NORETURN);
 
                 const rdx: u32 = self.blocks.items[bdx].idx;
@@ -345,6 +378,7 @@ const Function = struct {
     root: u32,
     table: u32,
     proto: u32,
+    locals: u32,
 };
 
 pub const Block = struct {
@@ -426,7 +460,7 @@ pub fn flatten(gpa: Allocator, tables: Tables, tree: Ast, tokens: Tokens) !Graph
         .scope = .root,
     };
 
-    _ = try graph.flatten(tables, tree, tokens, 0, 0, 0);
+    _ = try graph.flatten(tables, tree, tokens, undefined, 0, 0, 0);
 
     return graph;
 }

@@ -85,6 +85,7 @@ pub fn gen(writer: *Writer, graph: Graph, tables: Tables, tokens: Tokens) !void 
         try writer.print("pub {f} {{\n", .{gtypx});
 
         try genFunctionStates(writer, graph, function.root);
+        try genFunctionLocals(writer, graph, table, tokens, function.locals);
         try genFunctionSwitch(writer, graph, tokens, function.root);
 
         // epilogue
@@ -124,6 +125,24 @@ fn genFunctionStates(writer: *Writer, graph: Graph, root: u32) !void {
     }
 
     try writer.print("  }};\n", .{});
+}
+
+fn genFunctionLocals(writer: *Writer, graph: Graph, table: Table, tokens: Tokens, locals: u32) !void {
+    try writer.print("    // TODO, allocate locals\n", .{});
+
+    const len = graph.extra.items[locals];
+    const locations = graph.extra.items[locals+1..locals+len+1];
+
+    //const locations: []const u32 = &.{ 0 };
+    _ = table;
+
+    for (locations) |main| {
+        //const loc = graph.locations.items[main];
+        const dst = GenLocation{ .locations = graph.locations.items, .tokens = tokens, .main = main };
+        //const gtypx = GenTypx{ .table = table, .tokens = tokens, .typx = loc.typx, .name = null };
+
+        try writer.print("  var {f}: ? = undefined;\n", .{dst});
+    }
 }
 
 fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !void {
@@ -170,6 +189,7 @@ fn genFunctionSwitch(writer: *Writer, graph: Graph, tokens: Tokens, root: u32) !
 fn genBlockBody(writer: *Writer, tokens: Tokens, locations: []Location, extras: []u32, insts: []Inst) !void {
     for (insts) |inst| switch (inst.kind) {
         .set => try genInstSet(writer, tokens, locations, inst),
+        .store => try genInstStore(writer, tokens, locations, inst),
         .add => try genInstAdd(writer, tokens, locations, inst),
         .sub => try genInstSub(writer, tokens, locations, inst),
         .mul => try genInstMul(writer, tokens, locations, inst),
@@ -204,11 +224,17 @@ fn genInstSet(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst
     try writer.print("      const {f} = {f};\n", .{dst, src});
 }
 
+fn genInstStore(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
+    const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.mon_op.dst };
+    const src = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.mon_op.src };
+
+    try writer.print("      {f} = {f};\n", .{dst, src});
+}
+
 fn genInstAdd(writer: *Writer, tokens: Tokens, locations: []Location, inst: Inst) !void {
     const dst = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.dst };
     const lhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.lhs };
     const rhs = GenLocation{ .locations = locations, .tokens = tokens, .main = inst.extra.bin_op.rhs };
-
 
     try writer.print("      const {f} = {f} + {f};\n", .{dst, lhs, rhs});
 }
