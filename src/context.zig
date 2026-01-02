@@ -178,6 +178,10 @@ pub const Tables = struct {
     pub fn get(self: Tables, node: u32) ?Table {
         return self.table.get(node);
     }
+
+    pub fn getPtr(self: Tables, node: u32) ?*Table {
+        return self.table.getPtr(node);
+    }
 };
 
 pub const Table = struct {
@@ -313,7 +317,7 @@ pub const Table = struct {
         return self.table.get(key);
     }
 
-    fn pushTypx(self: *Table, typx: Typx) !u32 {
+    pub fn pushTypx(self: *Table, typx: Typx) !u32 {
         const idx = self.types.items.len;
         try self.types.append(self.allocator, typx);
         return @intCast(idx);

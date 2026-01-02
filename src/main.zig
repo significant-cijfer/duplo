@@ -104,7 +104,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     const lap_tables = timer.lap();
     defer tables.deinit();
 
-    var graph = Flattener.flatten(gpa, tables, tree, tokens) catch |err| {
+    var graph = Flattener.flatten(gpa, &tables, tree, tokens) catch |err| {
         const ndx = Flattener.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
