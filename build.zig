@@ -4,10 +4,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const lego_dep = b.dependency("lego", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "lego", .module = lego_dep.module("lego") },
+        },
     });
 
     const exe = b.addExecutable(.{
