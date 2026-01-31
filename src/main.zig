@@ -1,4 +1,5 @@
 const std = @import("std");
+const lego = @import("lego");
 const builtin = @import("builtin");
 
 const log = std.log;
@@ -8,10 +9,12 @@ const stdout = std.fs.File.stdout();
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
 
+const backend = lego.backend;
+
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
 const Context = @import("context.zig");
-const Flattener = @import("flattener.zig");
+const Flattener = @import("flattener2.zig");
 const Generator = @import("generator.zig");
 
 // Global TODOs:
@@ -104,7 +107,8 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     const lap_tables = timer.lap();
     defer tables.deinit();
 
-    var graph = Flattener.flatten(gpa, &tables, tree, tokens) catch |err| {
+    //var graph = Flattener.flatten(gpa, &tables, tree, tokens) catch |err| {
+    const graph = Flattener.flatten(gpa, tree, tokens) catch |err| {
         const ndx = Flattener.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
@@ -113,11 +117,15 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     };
 
     const lap_graph = timer.lap();
-    defer graph.deinit();
+    //defer graph.deinit();
 
-    Generator.generate(.zig, writer, graph, tables, tokens) catch |err| {
+    backend.emit(writer, gpa, graph, .c_linux) catch |err| {
         return scream(err);
     };
+
+    //Generator.generate(.zig, writer, graph, tables, tokens) catch |err| {
+    //    return scream(err);
+    //};
 
     const lap_gen = timer.lap();
 
