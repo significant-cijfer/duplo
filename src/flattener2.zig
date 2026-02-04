@@ -13,6 +13,9 @@ const Tokens = Lexer.Tokens;
 const Parser = @import("parser.zig");
 const Ast = Parser.Ast;
 
+const Analyzer = @import("analyzer.zig");
+const Context = Analyzer.Context;
+
 const Int = u32;
 
 pub var error_idx: ?Int = null;
@@ -54,11 +57,13 @@ const Builder = struct {
         self.root.varbs.deinit(self.allocator);
     }
 
-    //fn flatten(self: *Graph, tables: *Tables, tree: Ast, tokens: Tokens, locals: Locals, tdx: u32, bdx: u32, idx: u32) !Flat {
-    fn flatten(self: *Builder, tree: Ast, tokens: Tokens, bdx: Int, idx: Int) !Flow {
+    //fn flatten(self: *Graph, tables: *Context, tree: Ast, tokens: Tokens, locals: Locals, tdx: u32, bdx: u32, idx: u32) !Flat {
+    fn flatten(self: *Builder, tables: Context, tree: Ast, tokens: Tokens, tdx: Int, bdx: Int, idx: Int) !Flow {
         _ = self;
+        _ = tables;
         _ = tree;
         _ = tokens;
+        _ = tdx;
         _ = bdx;
         _ = idx;
 
@@ -73,7 +78,7 @@ const Builder = struct {
     }
 };
 
-pub fn flatten(gpa: Allocator, tree: Ast, tokens: Tokens) !Graph {
+pub fn flatten(gpa: Allocator, tables: Context, tree: Ast, tokens: Tokens) !Graph {
     var builder = Builder {
         .allocator = gpa,
         .functions = .empty,
@@ -88,7 +93,7 @@ pub fn flatten(gpa: Allocator, tree: Ast, tokens: Tokens) !Graph {
         },
     };
 
-    const flow = try builder.flatten(tree, tokens, 0, 0);
+    const flow = try builder.flatten(tables, tree, tokens, 0, 0, 0);
     _ = flow;
 
     return builder.emit();

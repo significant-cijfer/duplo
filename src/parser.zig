@@ -45,6 +45,10 @@ pub const Ast = struct {
         return @intCast(idx);
     }
 
+    pub fn at(self: Ast, node: u32) Node {
+        return self.nodes.items[node];
+    }
+
     pub fn extras(self: Ast, ext: Node.Extra) []u32 {
         const list = ext.list;
         return self.extra.items[list.idx..list.idx+list.len];

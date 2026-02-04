@@ -13,7 +13,7 @@ const backend = lego.backend;
 
 const Lexer = @import("lexer.zig");
 const Parser = @import("parser.zig");
-const Context = @import("context.zig");
+const Analyzer = @import("analyzer.zig");
 const Flattener = @import("flattener2.zig");
 const Generator = @import("generator.zig");
 
@@ -96,8 +96,8 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     const lap_tree = timer.lap();
     defer tree.deinit();
 
-    var tables = Context.scan(gpa, tree, tokens) catch |err| {
-        const ndx = Context.error_idx orelse return scream(err);
+    var tables = Analyzer.scan(gpa, tree, tokens) catch |err| {
+        const ndx = Analyzer.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
 
@@ -108,7 +108,7 @@ fn compile(gpa: Allocator, writer: *Writer, source: [:0]const u8) void {
     defer tables.deinit();
 
     //var graph = Flattener.flatten(gpa, &tables, tree, tokens) catch |err| {
-    const graph = Flattener.flatten(gpa, tree, tokens) catch |err| {
+    const graph = Flattener.flatten(gpa, tables, tree, tokens) catch |err| {
         const ndx = Flattener.error_idx orelse return scream(err);
         const tdx = tree.nodes.items[ndx].main;
         const idx = tokens.at(tdx).idx;
