@@ -1,7 +1,24 @@
 const std = @import("std");
+const lego = @import("lego");
+
+const parseInt = std.fmt.parseInt;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const StringHashMap = std.StringHashMapUnmanaged;
+const Managed = std.math.big.int.Managed;
+
+const Graph = lego.Graph;
+const Function = lego.Function;
+const Location = lego.Location;
+const Constant = lego.Constant;
+const Block = lego.Block;
+const Inst = lego.Inst;
+const Typx = lego.Typx;
+
+const BigInt = lego.BigInt;
+const LocationList = lego.LocationList;
+const LocationExtraList = lego.LocationExtraList;
 
 const Lexer = @import("lexer.zig");
 const Tokens = Lexer.Tokens;
@@ -9,462 +26,440 @@ const Tokens = Lexer.Tokens;
 const Parser = @import("parser.zig");
 const Ast = Parser.Ast;
 
-const Context = @import("context.zig");
-const Tables = Context.Tables;
-const Table = Context.Table;
-const Typx = Context.Typx;
+const Analyzer = @import("analyzer.zig");
+const Context = Analyzer.Context;
+const Symbol = Analyzer.Symbol;
+const ATypx = Analyzer.Typx;
 
-pub var error_idx: ?u32 = null;
+const Int = u32;
+const Vdx = u32;
 
-const Error = error {
-    UnhandledFlatten,
-}
-    || Allocator.Error;
+pub var error_idx: ?Int = null;
 
-pub const Graph = struct {
+const Builder = struct {
     allocator: Allocator,
     functions: ArrayList(Function),
     locations: ArrayList(Location),
+    constants: ArrayList(Constant),
+    manageds: ArrayList(Managed),
+    strings: ArrayList([]const u8),
     blocks: ArrayList(Block),
     insts: ArrayList(Inst),
-    extra: ArrayList(u32),
-    scope: Scope,
+    typxs: ArrayList(Typx),
 
-    pub const Location = struct {
-        main: u32,
-        typx: u32,
+    local: ArrayList(Int),
+    root: Root,
+
+    const Root = struct {
+        varbs: StringHashMap(Int),
     };
 
-    const Scope = enum {
-        root,
-        function,
+    const State = struct {
+        Vdx, // location
+        Int, // block
     };
 
-    //NOTE, I dont like this struct at all
-    //      It rly bothers me, but atp I just want this feature to be finished
-    const Locals = struct {
-        allocator: Allocator,
-        list: *ArrayList(u32),
+    pub fn deinit(self: *Builder) void {
+        for (self.manageds.items) |*managed|
+            managed.deinit();
 
-        fn reserve(self: Locals, local: u32) !void {
-            try self.list.append(self.allocator, local);
-        }
-
-        fn inject(self: Locals, graph: *Graph) !u32 {
-            defer self.list.deinit(self.allocator);
-
-            const idx = graph.extra.items.len;
-
-            try graph.extra.append(graph.allocator, @intCast(self.list.items.len));
-            try graph.extra.appendSlice(graph.allocator, self.list.items);
-
-            return @intCast(idx);
-        }
-    };
-
-    //NOTE, its not possible to destructure structs with named fields
-    //      so we define a tuple here
-    const Flat = struct {
-        u32, //block
-        u32, //location
-    };
-
-    pub fn deinit(self: *Graph) void {
+        self.functions.deinit(self.allocator);
+        self.locations.deinit(self.allocator);
+        self.constants.deinit(self.allocator);
+        self.manageds.deinit(self.allocator);
+        self.strings.deinit(self.allocator);
         self.blocks.deinit(self.allocator);
         self.insts.deinit(self.allocator);
+        self.typxs.deinit(self.allocator);
+        self.local.deinit(self.allocator);
+
+        self.root.varbs.deinit(self.allocator);
     }
 
-    fn reserveBlock(self: *Graph) !u32 {
-        const idx = self.blocks.items.len;
-        try self.blocks.append(self.allocator, .{
+    fn listOf(self: Builder, comptime T: type) []const T {
+        return switch (T) {
+            Function => self.functions.items,
+            Location => self.locations.items,
+            Constant => self.constants.items,
+            Managed => self.manages.items,
+            []const u8 => self.strings.items,
+            Block => self.blocks.items,
+            Inst => self.insts.items,
+            Typx => self.typxs.items,
+            Int => self.local.items,
+            else => @compileError("No list exists of type: " ++ @typeName(T)),
+        };
+    }
+
+    fn arrayOf(self: *Builder, comptime T: type) *ArrayList(T) {
+        return switch (T) {
+            Function => &self.functions,
+            Location => &self.locations,
+            Constant => &self.constants,
+            Managed => &self.manageds,
+            []const u8 => &self.strings,
+            Block => &self.blocks,
+            Inst => &self.insts,
+            Typx => &self.typxs,
+            Int => &self.local,
+            else => @compileError("No list exists of type: " ++ @typeName(T)),
+        };
+    }
+
+    pub fn at(self: Builder, comptime T: type, idx: Int) T {
+        return self.listOf(T)[idx];
+    }
+
+    pub fn slice(self: Builder, comptime T: type, idx: Int, len: Int) []const T {
+        return self.listOf(T)[idx..idx+len];
+    }
+
+    fn add(self: *Builder, value: anytype) !Int {
+        const arr = self.arrayOf(@TypeOf(value));
+        const idx = arr.items.len;
+
+        try arr.append(self.allocator, value);
+        return @intCast(idx);
+    }
+
+    fn addSlice(self: *Builder, value: anytype) !Int {
+        const arr = self.arrayOf(std.meta.Child(@TypeOf(value)));
+        const idx = arr.items.len;
+
+        try arr.appendSlice(self.allocator, value);
+        return @intCast(idx);
+    }
+
+    fn newSlice(self: *Builder, comptime T: type, len: Int) !struct { Int, []T } {
+        const arr = self.arrayOf(T);
+        const idx = arr.items.len;
+
+        return .{
+            @intCast(idx),
+            try arr.addManyAsSlice(self.allocator, len),
+        };
+    }
+
+    fn newBlock(self: *Builder) !Int {
+        return self.add(Block{
             .idx = @intCast(self.insts.items.len),
             .len = undefined,
             .flow = undefined,
         });
-        return @intCast(idx);
     }
 
-    fn reserveLocation(self: *Graph, table: *Table, main: ?u32, typx: Typx) !u32 {
+    fn finishBlock(self: *Builder, block: Int, flow: Block.Flow) void {
+        const ptr = &self.blocks.items[block];
+        const idx = ptr.idx;
+        const last = block == self.blocks.items.len-1;
+
+        const end = switch (last) {
+            true => self.insts.items.len,
+            false => self.blocks.items[block+1].idx,
+        };
+
+        ptr.len = @as(Int, @intCast(end)) - idx;
+        ptr.flow = flow;
+    }
+
+    fn trivialize(self: *Builder, comptime T: type, ctx: Context, idx: Int) !T {
+        _ = self;
+
+        switch (T) {
+            Typx => {
+                return switch (ctx.at(ATypx, idx)) {
+                    .int => |i| .{ .primitive = .{
+                        .bits = i.bits,
+                        .sign = i.sign,
+                    }},
+                    .function => .{ .word = {} },
+                    else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
+                };
+            },
+            else => @compileError("No list exists of type: " ++ @typeName(T)),
+        }
+    }
+
+    fn drive(self: *Builder) !LocationList {
         const idx = self.locations.items.len;
-        const tdx = try table.pushTypx(typx);
-        try self.locations.append(self.allocator, .{
-            .main = main orelse 0,
-            .typx = tdx,
-        });
-        return @intCast(idx);
+        const len = self.local.items.len;
+
+        for (self.local.items) |item|
+            _ = try self.add(self.at(Location, item));
+
+        self.local.clearRetainingCapacity();
+
+        return .{
+            .items = @intCast(idx),
+            .len = @intCast(len),
+        };
     }
 
-    fn flatten(self: *Graph, tables: *Tables, tree: Ast, tokens: Tokens, locals: Locals, tdx: u32, bdx: u32, idx: u32) !Flat {
-        const table = tables.getPtr(tdx).?;
-        const node = tree.nodes.items[idx];
-        var block = bdx;
+    fn auto(self: *Builder, typx: Int) !Int {
+        const idx = try self.add(Location{
+            .code = .{
+                .token = @intCast(self.locations.items.len),
+                .temp = true
+            },
+            .typx = typx,
+        });
 
-        errdefer { if (error_idx == null) error_idx = idx; }
+        _ = try self.add(idx);
+        return idx;
+    }
+
+    fn named(self: *Builder, name: []const u8, typx: Int) !Int {
+        return self.add(Location{
+            .code = .{
+                .token = try self.add(name),
+                .temp = false,
+            },
+            .typx = typx,
+        });
+    }
+
+    fn flatten(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) !State {
+        const node = tree.at(idx);
+        var block = _block;
+
+        errdefer if (error_idx == null) { error_idx = idx ; };
 
         switch (node.kind) {
             .root => {
-                const roots = tree.extras(node.extra);
+                const items = tree.extras(node.extra);
 
-                for (roots) |root| {
-                    //NOTE, block reassignment is technically useless here
-                    //      but it feels nice to do it anyway
-                    block, _ = try self.flatten(tables, tree, tokens, locals, idx, block, root);
+                for (items) |item| {
+                    _, block = try self.flatten(ctx, tree, tokens, table, block, item);
                 }
 
-                return .{ block, try self.reserveLocation(table, null, .VOID) };
+                return .{ 0, block };
             },
             .fdecl => {
                 const name = tokens.slice(node.main+1);
-                const root = try self.reserveBlock();
+                const blok = try self.newBlock();
 
-                self.scope = .function;
-                defer self.scope = .root;
+                const bdx, block = try self.flatten(ctx, tree, tokens, idx, blok, node.extra.fdecl.body);
+                _ = bdx;
 
-                var list = ArrayList(u32).empty;
+                const symbol = try ctx.get(table, name);
+                const proto = ctx.at(ATypx, symbol.typx).function;
+                const p_names = ctx.slice(Int, proto.names, proto.len);
+                const p_items = ctx.slice(Int, proto.items, proto.len);
 
-                const ls = Locals{
-                    .allocator = self.allocator,
-                    .list = &list,
-                };
+                const ndx, const names = try self.newSlice([]const u8, proto.len);
+                const pdx, const items = try self.newSlice(Typx, proto.len);
 
-                block, const bdy = try self.flatten(tables, tree, tokens, ls, idx, root, node.extra.fdecl.body);
+                for (p_names, names) |src, *dst|
+                    dst.* = tokens.slice(src);
 
-                try self.functions.append(self.allocator, .{
-                    .name = name,
-                    .root = root,
-                    .table = idx,
-                    .proto = node.extra.fdecl.proto,
-                    .locals = try ls.inject(self),
+                for (p_items, items) |src, *dst|
+                    dst.* = try self.trivialize(Typx, ctx, src);
+
+                _ = try self.add(Function{
+                    .ident = try self.add(name),
+                    .proto = .{
+                        .prms = .{
+                            .names = ndx,
+                            .items = pdx,
+                            .len = proto.len,
+                        },
+                        .ret = try self.add(try self.trivialize(Typx, ctx, proto.ret)),
+                    },
+                    .varbs = try self.drive(),
+                    .block = blok,
                 });
 
-                return .{ block, bdy };
+                return .{ 0, block };
             },
             .fcall => {
-                block, const func = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.fcall.func);
+                const call = node.extra.fcall;
+                const fdx, block = try self.flatten(ctx, tree, tokens, table, block, call.func);
 
-                const fun = self.locations.items[func];
-                const fdx = table.types.items[fun.typx];
-                const dst = try self.reserveLocation(table, null, fdx);
+                const loc = self.at(Location, fdx);
+                const dst = try self.auto(loc.typx);
 
-                const list = tree.nodes.items[node.extra.fcall.args];
-                const args = tree.extras(list.extra);
+                const list = tree.at(call.args);
+                const items = tree.extras(list.extra);
 
-                const off = self.extra.items.len;
-                const len = args.len;
+                const len: u32 = @intCast(items.len);
+                const adx, const args = try self.newSlice(Location, len);
 
-                for (args) |arg| {
-                    block, const loc = try self.flatten(tables, tree, tokens, locals, tdx, block, arg);
-
-                    try self.extra.append(self.allocator, loc);
+                for (items, args) |src, *arg| {
+                    const ldx, block = try self.flatten(ctx, tree, tokens, table, block, src);
+                    arg.* = self.at(Location, ldx);
                 }
 
-                try self.insts.append(self.allocator, .{
-                    .kind = .call,
-                    .extra = .{ .call = .{
-                        .dst = dst,
-                        .func = func,
-                        .args = @intCast(off),
-                        .len = @intCast(len),
-                    }},
-                });
+                _ = try self.add(Inst{ .call = .{
+                    .dst = dst,
+                    .src = fdx,
+                    .idx = adx,
+                    .len = len,
+                }});
 
-                return .{ block, dst };
+                return .{ dst, block };
             },
             .integer => {
-                return .{ block, try self.reserveLocation(table, node.main, .INTEGER) };
+                const dst = try self.auto(try self.add(Typx{ .word = {} }));
+
+                const text = tokens.slice(node.main);
+                const int = try parseInt(i128, text, 0);
+
+                const big = try Managed.initSet(self.allocator, int);
+                const src = try self.add(Constant{ .primitive = big.toConst() });
+                _ = try self.add(big);
+
+                _ = try self.add(Inst{ .put = .{
+                    .dst = dst,
+                    .src = src,
+                }});
+
+
+                return .{ dst, block };
             },
             .identifier => {
                 const name = tokens.slice(node.main);
-                const symb = table.get(name).?;
-                const typx = table.types.items[symb.typx];
+                const symbol = try ctx.get(table, name);
 
-                return .{ block, try self.reserveLocation(table, node.main, typx) };
+                const typx = try self.trivialize(Typx, ctx, symbol.typx);
+                const src = try self.named(name, try self.add(typx));
+
+                return .{ src, block };
             },
             .vardef => {
-                if (self.scope == .root) return .{ block, try self.reserveLocation(table, null, .VOID) };
-
                 const name = tokens.slice(node.main+1);
-                const symb = table.get(name).?;
-                const typx = table.types.items[symb.typx];
+                const symbol = try ctx.get(table, name);
 
-                block, const src = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.rhs);
-                const dst = try self.reserveLocation(table, node.main+1, typx);
+                const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                try self.insts.append(self.allocator, .{
-                    .kind = .set,
-                    .extra = .{ .mon_op = .{
-                        .dst = dst,
-                        .src = src,
-                    }},
-                });
+                const typx = try self.trivialize(Typx, ctx, symbol.typx);
+                const dst = try self.named(name, try self.add(typx));
+                _ = try self.add(dst);
 
-                return .{ block, dst };
+                _ = try self.add(Inst{ .mov = .{
+                    .dst = dst,
+                    .src = src,
+                }});
+
+                return .{ dst, block };
             },
             .block => {
-                const stmts = tree.extras(node.extra);
+                const items = tree.extras(node.extra);
 
-                for (stmts) |stmt| {
-                    block, _ = try self.flatten(tables, tree, tokens, locals, idx, block, stmt);
+                for (items) |item| {
+                    _, block = try self.flatten(ctx, tree, tokens, idx, block, item);
                 }
 
-                return .{ block, try self.reserveLocation(table, null, .VOID) };
+                return .{ 0, block };
             },
             .add, .sub, .mul, .div => {
-                block, const lhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.lhs);
-                block, const rhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.bin_op.rhs);
+                const lhs, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.lhs);
+                const rhs, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                const loct = self.locations.items[lhs];
-                const ldx = table.types.items[loct.typx];
-                const dst = try self.reserveLocation(table, null, ldx);
+                const loc = self.at(Location, lhs);
+                const dst = try self.auto(loc.typx);
 
-                const kind: Inst.Kind = switch (node.kind) {
-                    .add => .add,
-                    .sub => .sub,
-                    .mul => .mul,
-                    .div => .div,
+                const op = Inst.BinOp{
+                    .dst = dst,
+                    .lhs = lhs,
+                    .rhs = rhs,
+                };
+
+                const inst = switch (node.kind) {
+                    .add => Inst{ .add = op },
+                    .sub => Inst{ .sub = op },
+                    .mul => Inst{ .mul = op },
+                    .div => Inst{ .div = op },
                     else => unreachable,
                 };
 
-                try self.insts.append(self.allocator, .{
-                    .kind = kind,
-                    .extra = .{ .bin_op = .{
-                        .dst = dst,
-                        .lhs = lhs,
-                        .rhs = rhs,
-                    }},
-                });
+                _ = try self.add(inst);
 
-                return .{ block, dst };
+                return .{ dst, block };
             },
             .ternary => {
-                const dst = try self.reserveLocation(table, null, undefined);
-                try locals.reserve(dst);
+                //TODO, figure out actual ternary type
+                const dst = try self.auto(try self.add(Typx{ .word = {} }));
 
-                /////
-                block, const chs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.lhs);
-                const cbdx = block;
+                const chs, const c_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.lhs);
 
-                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
-                /////
+                block = try self.newBlock();
+                const lhs, const l_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+0);
+                _ = try self.add(Inst{ .mov = .{
+                    .dst = dst,
+                    .src = lhs
+                }});
 
+                block = try self.newBlock();
+                const rhs, const r_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+1);
+                _ = try self.add(Inst{ .mov = .{
+                    .dst = dst,
+                    .src = rhs
+                }});
 
-                /////
-                block = try self.reserveBlock();
-                block, const lhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.mhs+0);
-                const lbdx = block;
+                block = try self.newBlock();
 
-                try self.insts.append(self.allocator, .{
-                    .kind = .store,
-                    .extra = .{ .mon_op = .{
-                        .dst = dst,
-                        .src = lhs,
-                    }},
-                });
+                self.finishBlock(c_block, .{ .jnz = .{
+                    .cond = chs,
+                    .lhs = l_block,
+                    .rhs = r_block,
+                }});
 
-                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
-                /////
+                self.finishBlock(l_block, .{ .jmp = block });
+                self.finishBlock(r_block, .{ .jmp = block });
 
-
-                /////
-                block = try self.reserveBlock();
-                block, const rhs = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.tri_op.mhs+1);
-                const rbdx = block;
-
-                try self.insts.append(self.allocator, .{
-                    .kind = .store,
-                    .extra = .{ .mon_op = .{
-                        .dst = dst,
-                        .src = rhs,
-                    }},
-                });
-
-                self.blocks.items[block].len = @as(u32, @intCast(self.insts.items.len)) - self.blocks.items[block].idx;
-                /////
-
-
-                block = try self.reserveBlock();
-
-                self.blocks.items[cbdx].flow = .{
-                    .kind = .jnz,
-                    .extra = .{ .cond = .{
-                        .chs = chs,
-                        .lhs = lbdx,
-                        .rhs = rbdx,
-                    }},
-                };
-
-                self.blocks.items[lbdx].flow = .{
-                    .kind = .jmp,
-                    .extra = .{ .mono = block },
-                };
-
-                self.blocks.items[rbdx].flow = .{
-                    .kind = .jmp,
-                    .extra = .{ .mono = block },
-                };
-
-                return .{ block, dst };
+                return .{ dst, block };
             },
             .ret => {
-                block, const src = try self.flatten(tables, tree, tokens, locals, tdx, block, node.extra.mon_op);
-                const dst = try self.reserveLocation(table, null, .NORETURN);
+                const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.mon_op);
+                self.finishBlock(block, .{ .ret = src });
 
-                const rdx: u32 = self.blocks.items[bdx].idx;
-                const len: u32 = @intCast(self.insts.items.len);
-
-                self.blocks.items[bdx] = .{
-                    .idx = rdx,
-                    .len = len - rdx,
-                    .flow = .{
-                        .kind = .ret,
-                        .extra = .{ .mono = src },
-                    },
-                };
-
-                return .{ block, dst };
+                return .{ 0, block };
             },
-            else => return error.UnhandledFlatten,
+            else => std.debug.panic("TODO, handle flatten: {}", .{node.kind}),
         }
     }
 
-    pub fn debug(self: Graph, tokens: Tokens) void {
-        for (self.functions.items) |function| {
-            std.log.info("Function: {s}", .{function.name});
+    fn emit(self: Builder) !struct { Builder, Graph } {
+        const graph = Graph{
+            .functions = self.functions.items,
+            .locations = self.locations.items,
+            .constants = self.constants.items,
+            .strings = self.strings.items,
+            .blocks = self.blocks.items,
+            .insts = self.insts.items,
+            .typxs = self.typxs.items,
+            .root = .{
+                .varbs = .{
+                    .items = 0,
+                    .extra = 0,
+                    .len = 0,
+                },
+            },
+        };
 
-            const block = self.blocks.items[function.root];
-            for (self.insts.items[block.idx..block.idx+block.len]) |inst| switch (inst.kind) {
-                .set => std.log.info("  {any}:   {{{}}} = {s}", .{
-                    inst.kind,
-                    inst.extra.mon_op.dst,
-                    tokens.slice(inst.extra.mon_op.src)
-                }),
-                .load => std.log.info("  {any}:  {{{}}} = {s}", .{
-                    inst.kind,
-                    inst.extra.mon_op.dst,
-                    tokens.slice(inst.extra.mon_op.src)
-                }),
-                .store => std.log.info("  {any}: {{{}}} = {{{}}}", .{
-                    inst.kind,
-                    inst.extra.mon_op.dst,
-                    inst.extra.mon_op.src,
-                }),
-                .add, .sub, .mul, .div => std.log.info("  {any}:   {{{}}} = {{{}}} + {{{}}}", .{
-                    inst.kind,
-                    inst.extra.bin_op.dst,
-                    inst.extra.bin_op.lhs,
-                    inst.extra.bin_op.rhs,
-                }),
-                .call => std.log.info("  {any}:  {{{}}} = {{{}}}", .{
-                    inst.kind,
-                    inst.extra.call.dst,
-                    inst.extra.call.func,
-                }),
-            };
-
-            switch (block.flow.kind) {
-                .ret => std.log.info("  {any}:   {{{}}}", .{
-                    block.flow.kind,
-                    block.flow.extra.mono,
-                }),
-                else => @panic("TODO"),
-            }
-        }
-
-        std.log.info("Locations:", .{});
-        for (self.locations.items, 0..) |location, idx| {
-            std.log.info("  {{{}}} : {any}", .{idx, location.typx.kind});
-        }
+        return .{ self, graph };
     }
 };
 
-const Function = struct {
-    name: []const u8,
-    root: u32,
-    table: u32,
-    proto: u32,
-    locals: u32,
-};
-
-pub const Block = struct {
-    idx: u32,
-    len: u32,
-    flow: Flow,
-};
-
-const Flow = struct {
-    kind: Kind,
-    extra: Extra,
-
-    const Kind = enum {
-        jmp,
-        jnz,
-        ret,
-    };
-
-    const Extra = union {
-        mono: u32,
-        cond: Cond,
-
-        const Cond = struct {
-            chs: u32,
-            lhs: u32,
-            rhs: u32,
-        };
-    };
-};
-
-pub const Inst = struct {
-    kind: Kind,
-    extra: Extra,
-
-    const Kind = enum {
-        set,
-        load,
-        store,
-        add,
-        sub,
-        mul,
-        div,
-        call,
-    };
-
-    const Extra = union {
-        mon_op: MonOp,
-        bin_op: BinOp,
-        call: Call,
-
-        const MonOp = struct {
-            dst: u32,
-            src: u32,
-        };
-
-        const BinOp = struct {
-            dst: u32,
-            lhs: u32,
-            rhs: u32,
-        };
-
-        const Call = struct {
-            dst: u32,
-            func: u32,
-            args: u32,
-            len: u32,
-        };
-    };
-};
-
-pub fn flatten(gpa: Allocator, tables: *Tables, tree: Ast, tokens: Tokens) !Graph {
-    var graph = Graph{
+pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct { Builder, Graph } {
+    var builder = Builder {
         .allocator = gpa,
         .functions = .empty,
         .locations = .empty,
+        .constants = .empty,
+        .manageds = .empty,
+        .strings = .empty,
         .blocks = .empty,
         .insts = .empty,
-        .extra = .empty,
-        .scope = .root,
+        .typxs = .empty,
+        .local = .empty,
+        .root = .{
+            .varbs = .empty,
+        },
     };
 
-    _ = try graph.flatten(tables, tree, tokens, undefined, 0, 0, 0);
+    const flow = try builder.flatten(ctx, tree, tokens, 0, 0, 0);
+    _ = flow;
 
-    return graph;
+    return builder.emit();
 }

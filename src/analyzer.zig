@@ -32,7 +32,6 @@ const Error = error {
     NonIntegerTerm,
     UncallableTerm,
 }
-    || error { TODO_Eval }
     || Allocator.Error
     || std.fmt.ParseIntError
     || error { InvalidBase, InvalidCharacter };
@@ -126,7 +125,7 @@ pub const Context = struct {
             Constant => self.constants.items,
             Typx => self.typxs.items,
             Int => self.extra.items,
-            else => @compileError("No list exists of type: " + @tagName(T)),
+            else => @compileError("No list exists of type: " ++ @typeName(T)),
         };
     }
 
@@ -135,7 +134,7 @@ pub const Context = struct {
             Constant => &self.constants,
             Typx => &self.typxs,
             Int => &self.extra,
-            else => @compileError("No list exists of type: " + @tagName(T)),
+            else => @compileError("No list exists of type: " ++ @typeName(T)),
         };
     }
 
@@ -217,7 +216,7 @@ pub const Context = struct {
     }
 
     //NOTE, rhs has to "transform" into lhs
-    fn castable(self: Context, lhs: Int, rhs: Int) !bool {
+    fn castable(self: Context, lhs: Int, rhs: Int) bool {
         const dst = self.at(Typx, lhs);
         const src = self.at(Typx, rhs);
 
@@ -234,7 +233,7 @@ pub const Context = struct {
                 .int => |d| d.sign == s.sign and d.bits >= s.bits,
                 else => false,
             },
-            else => error.TODO_Castable,
+            else => @panic("TODO"),
         };
     }
 
@@ -252,7 +251,7 @@ pub const Context = struct {
     }
 
     fn examine(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int) !Int {
-        const node = tree.nodes.items[idx];
+        const node = tree.at(idx);
 
         errdefer if (error_idx == null) { error_idx = idx ; };
 
@@ -341,7 +340,7 @@ pub const Context = struct {
                 for (prms, args) |prm, arg| {
                     const adx = try self.examine(tree, tokens, table, arg);
 
-                    if (!try self.castable(prm, adx))
+                    if (!self.castable(prm, adx))
                         return error.IncompatibleTypes;
                 }
 
@@ -367,7 +366,7 @@ pub const Context = struct {
                 const ldx = self.at(Constant, lev).typx;
                 const rdx = try self.examine(tree, tokens, table, node.extra.bin_op.rhs);
 
-                if (!try self.castable(ldx, rdx))
+                if (!self.castable(ldx, rdx))
                     return error.IncompatibleTypes;
 
                 //TODO, check for linear types in root scope
@@ -406,7 +405,7 @@ pub const Context = struct {
                 if (!self.isInteger(ldx) or !self.isInteger(rdx))
                     return error.NonIntegerTerm;
 
-                if (!try self.castable(ldx, rdx))
+                if (!self.castable(ldx, rdx))
                     return error.IncompatibleTypes;
 
                 return ldx;
@@ -419,7 +418,7 @@ pub const Context = struct {
                 if (!self.isInteger(cdx))
                     return error.NonIntegerTerm;
 
-                if (!try self.castable(ldx, rdx))
+                if (!self.castable(ldx, rdx))
                     return error.IncompatibleTypes;
 
                 return ldx;
@@ -435,7 +434,7 @@ pub const Context = struct {
 
                 return self.add(Typx.NORET);
             },
-            else => return error.TODO_Node,
+            else => @panic("TODO"),
         }
     }
 
@@ -482,8 +481,7 @@ pub const Context = struct {
                 return 0;
             },
             else => {
-                std.log.err("eval: {}", .{node.kind});
-                return error.TODO_Eval;
+                std.debug.panic("eval: {}", .{node.kind});
             },
         }
     }
@@ -500,7 +498,7 @@ const Table = struct {
     }
 };
 
-const Symbol = struct {
+pub const Symbol = struct {
     alive: bool = true,
     typx: Int,
     con: Int,
@@ -521,7 +519,7 @@ const Frame = struct {
     };
 };
 
-const Typx = union(enum) {
+pub const Typx = union(enum) {
     typx: void,
     noval: void,
     noret: void,
