@@ -17,7 +17,7 @@ const Int = u32;
 const Vdx = u32;
 const BigInt = std.math.big.int.Managed;
 
-const Error = error {
+const Error = error{
     UndefinedTable,
     UndefinedKey,
     ShadowedKey,
@@ -31,10 +31,7 @@ const Error = error {
     IncompatibleTypes,
     NonIntegerTerm,
     UncallableTerm,
-}
-    || Allocator.Error
-    || std.fmt.ParseIntError
-    || error { InvalidBase, InvalidCharacter };
+} || Allocator.Error || std.fmt.ParseIntError || error{ InvalidBase, InvalidCharacter };
 
 pub var error_idx: ?u32 = null;
 
@@ -103,8 +100,7 @@ pub const Context = struct {
     }
 
     fn birth(self: *Context, table: Int, node: Int, storage: Storage, ret: ?Int, brk: ?Int) !Int {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
         const child = Table{
             .parent = table,
@@ -143,7 +139,7 @@ pub const Context = struct {
     }
 
     pub fn slice(self: Context, comptime T: type, idx: Int, len: Int) []const T {
-        return self.listOf(T)[idx..idx+len];
+        return self.listOf(T)[idx .. idx + len];
     }
 
     fn add(self: *Context, value: anytype) !Int {
@@ -163,17 +159,13 @@ pub const Context = struct {
     }
 
     pub fn get(self: Context, table: Int, key: []const u8) !Symbol {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
-        return t.symbols.get(key)
-            orelse if (t.parent) |parent| self.get(parent, key)
-                else error.UndefinedKey;
+        return t.symbols.get(key) orelse if (t.parent) |parent| self.get(parent, key) else error.UndefinedKey;
     }
 
     fn put(self: *Context, table: Int, key: []const u8, symbol: Symbol) !void {
-        const t = self.tables.getPtr(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.getPtr(table) orelse return error.UndefinedTable;
 
         if (t.symbols.contains(key))
             return error.ShadowedKey;
@@ -182,22 +174,19 @@ pub const Context = struct {
     }
 
     fn frameReturns(self: Context, table: Int) !bool {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
         return t.frame.ret != 0;
     }
 
     fn frameBreaks(self: Context, table: Int) !bool {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
         return t.frame.brk != 0;
     }
 
     fn returnable(self: Context, table: Int, typx: Int) !bool {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
         if (!try self.frameReturns(table))
             return error.UnspecifiedReturn;
@@ -206,8 +195,7 @@ pub const Context = struct {
     }
 
     fn breakable(self: Context, table: Int, typx: Int) !bool {
-        const t = self.tables.get(table)
-            orelse return error.UndefinedTable;
+        const t = self.tables.get(table) orelse return error.UndefinedTable;
 
         if (!try self.frameBreaks(table))
             return error.UnspecifiedBreak;
@@ -219,6 +207,9 @@ pub const Context = struct {
     fn castable(self: Context, lhs: Int, rhs: Int) bool {
         const dst = self.at(Typx, lhs);
         const src = self.at(Typx, rhs);
+
+        if (dst == .noret)
+            return true;
 
         return switch (src) {
             .typx => dst == .typx,
@@ -253,7 +244,9 @@ pub const Context = struct {
     fn examine(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int) !Int {
         const node = tree.at(idx);
 
-        errdefer if (error_idx == null) { error_idx = idx ; };
+        errdefer if (error_idx == null) {
+            error_idx = idx;
+        };
 
         switch (node.kind) {
             .root => {
@@ -269,7 +262,7 @@ pub const Context = struct {
             },
             .fdecl => {
                 const pdx = try self.examine(tree, tokens, table, node.extra.fdecl.proto);
-                const func = tokens.slice(node.main+1);
+                const func = tokens.slice(node.main + 1);
 
                 const proto = self.at(Typx, pdx).function;
                 const names = self.slice(Int, proto.names, proto.len);
@@ -322,7 +315,7 @@ pub const Context = struct {
                     .items = try self.addSlice(items.items),
                     .len = @intCast(items.items.len),
                     .ret = rdx,
-                }});
+                } });
             },
             .fcall => {
                 const call = node.extra.fcall;
@@ -358,7 +351,7 @@ pub const Context = struct {
                 return symbol.typx;
             },
             .vardef => {
-                const name = tokens.slice(node.main+1);
+                const name = tokens.slice(node.main + 1);
 
                 const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
                 const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs);
@@ -412,8 +405,8 @@ pub const Context = struct {
             },
             .ternary => {
                 const cdx = try self.examine(tree, tokens, table, node.extra.tri_op.lhs);
-                const ldx = try self.examine(tree, tokens, table, node.extra.tri_op.mhs+0);
-                const rdx = try self.examine(tree, tokens, table, node.extra.tri_op.mhs+1);
+                const ldx = try self.examine(tree, tokens, table, node.extra.tri_op.mhs + 0);
+                const rdx = try self.examine(tree, tokens, table, node.extra.tri_op.mhs + 1);
 
                 if (!self.isInteger(cdx))
                     return error.NonIntegerTerm;
@@ -441,7 +434,9 @@ pub const Context = struct {
     fn eval(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int) Error!Int {
         const node = tree.nodes.items[idx];
 
-        errdefer if (error_idx == null) { error_idx = idx ; };
+        errdefer if (error_idx == null) {
+            error_idx = idx;
+        };
 
         switch (node.kind) {
             .integer => {

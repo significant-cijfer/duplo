@@ -10,12 +10,11 @@ const Token = Lexer.Token;
 
 pub var error_idx: ?u32 = null;
 
-const Error = error {
+const Error = error{
     UnexpectedOp,
     UnexpectedToken,
     UnexpectedFirstToken,
-}
-    || Allocator.Error;
+} || Allocator.Error;
 
 pub const Ast = struct {
     allocator: Allocator,
@@ -51,15 +50,10 @@ pub const Ast = struct {
 
     pub fn extras(self: Ast, ext: Node.Extra) []u32 {
         const list = ext.list;
-        return self.extra.items[list.idx..list.idx+list.len];
+        return self.extra.items[list.idx .. list.idx + list.len];
     }
 
-    pub fn debug(
-        self: Ast,
-        tokens: Tokens,
-        idx: u32,
-        depth: u32
-    ) void {
+    pub fn debug(self: Ast, tokens: Tokens, idx: u32, depth: u32) void {
         const node = self.nodes.items[idx];
 
         for (0..depth) |_|
@@ -79,20 +73,20 @@ pub const Ast = struct {
                 const roots = self.extras(node.extra);
 
                 for (roots) |root| {
-                    self.debug(tokens, root, depth+1);
+                    self.debug(tokens, root, depth + 1);
                 }
             },
             .fdecl => {
-                self.debug(tokens, node.extra.fdecl.proto, depth+1);
-                self.debug(tokens, node.extra.fdecl.body, depth+1);
+                self.debug(tokens, node.extra.fdecl.proto, depth + 1);
+                self.debug(tokens, node.extra.fdecl.body, depth + 1);
             },
             .fcall => {
-                self.debug(tokens, node.extra.fcall.func, depth+1);
-                self.debug(tokens, node.extra.fcall.args, depth+1);
+                self.debug(tokens, node.extra.fcall.func, depth + 1);
+                self.debug(tokens, node.extra.fcall.args, depth + 1);
             },
             .fproto => {
-                self.debug(tokens, node.extra.fproto.prms, depth+1);
-                self.debug(tokens, node.extra.fproto.rtyp, depth+1);
+                self.debug(tokens, node.extra.fproto.prms, depth + 1);
+                self.debug(tokens, node.extra.fproto.rtyp, depth + 1);
             },
             .integer => {},
             .identifier => {},
@@ -100,56 +94,48 @@ pub const Ast = struct {
                 const mmbrs = self.extras(node.extra);
 
                 for (mmbrs) |mmbr| {
-                    self.debug(tokens, mmbr, depth+1);
+                    self.debug(tokens, mmbr, depth + 1);
                 }
             },
             .structlit => {
-                self.debug(tokens, node.extra.structlit.head, depth+1);
-                self.debug(tokens, node.extra.structlit.defs, depth+1);
+                self.debug(tokens, node.extra.structlit.head, depth + 1);
+                self.debug(tokens, node.extra.structlit.defs, depth + 1);
             },
             .vardef => {
-                for (0..depth+1) |_|
+                for (0..depth + 1) |_|
                     std.debug.print("  ", .{});
 
-                std.debug.print("{s}\n", .{tokens.slice(node.main+1)});
-                self.debug(tokens, node.extra.bin_op.lhs, depth+2);
-                self.debug(tokens, node.extra.bin_op.rhs, depth+2);
+                std.debug.print("{s}\n", .{tokens.slice(node.main + 1)});
+                self.debug(tokens, node.extra.bin_op.lhs, depth + 2);
+                self.debug(tokens, node.extra.bin_op.rhs, depth + 2);
             },
-            .block,
-            .list => {
+            .block, .list => {
                 const stmts = self.extras(node.extra);
 
                 for (stmts) |stmt| {
-                    self.debug(tokens, stmt, depth+1);
+                    self.debug(tokens, stmt, depth + 1);
                 }
             },
-            .add,
-            .sub,
-            .mul,
-            .div,
-            .assign,
-            .logand,
-            .logior => {
-                self.debug(tokens, node.extra.bin_op.lhs, depth+1);
-                self.debug(tokens, node.extra.bin_op.rhs, depth+1);
+            .add, .sub, .mul, .div, .assign, .logand, .logior => {
+                self.debug(tokens, node.extra.bin_op.lhs, depth + 1);
+                self.debug(tokens, node.extra.bin_op.rhs, depth + 1);
             },
             .dot => {
-                self.debug(tokens, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth + 1);
             },
-            .ref,
-            .deref => {
-                self.debug(tokens, node.extra.mon_op, depth+1);
+            .ref, .deref => {
+                self.debug(tokens, node.extra.mon_op, depth + 1);
             },
             .ternary => {
-                self.debug(tokens, node.extra.tri_op.lhs, depth+1);
-                self.debug(tokens, node.extra.tri_op.mhs, depth+1);
-                self.debug(tokens, node.extra.tri_op.mhs+1, depth+1);
+                self.debug(tokens, node.extra.tri_op.lhs, depth + 1);
+                self.debug(tokens, node.extra.tri_op.mhs, depth + 1);
+                self.debug(tokens, node.extra.tri_op.mhs + 1, depth + 1);
             },
             .destroy => {
-                self.debug(tokens, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth + 1);
             },
             .ret => if (node.extra.mon_op != 0) {
-                self.debug(tokens, node.extra.mon_op, depth+1);
+                self.debug(tokens, node.extra.mon_op, depth + 1);
             },
         }
     }
@@ -273,20 +259,18 @@ const Op = enum {
 
     fn prefixPower(self: Op) ?u8 {
         return switch (self) {
-            .ref,
-            .deref => 10,
-            .destroy,
-            .ret => 1,
+            .ref, .deref => 10,
+            .destroy, .ret => 1,
             else => null,
         };
     }
 
     fn infixPower(self: Op) ?Power {
         return switch (self) {
-            .assign =>          .{ .lbp = 2, .rbp = 3 },
+            .assign => .{ .lbp = 2, .rbp = 3 },
             .logand, .logior => .{ .lbp = 4, .rbp = 5 },
-            .add, .sub =>       .{ .lbp = 6, .rbp = 7 },
-            .mul, .div =>       .{ .lbp = 8, .rbp = 9 },
+            .add, .sub => .{ .lbp = 6, .rbp = 7 },
+            .mul, .div => .{ .lbp = 8, .rbp = 9 },
             else => null,
         };
     }
@@ -347,7 +331,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
                     .extra = .{ .list = .{
                         .idx = try tree.pushExtraList(prms.items),
                         .len = @intCast(prms.items.len),
-                    }},
+                    } },
                 });
 
                 const proto = try tree.pushNode(.{
@@ -356,7 +340,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
                     .extra = .{ .fproto = .{
                         .prms = qrms,
                         .rtyp = try tree.pushNode(rtyp),
-                    }},
+                    } },
                 });
 
                 const bdx = try tree.pushNode(body);
@@ -367,16 +351,16 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
                     .extra = .{ .fdecl = .{
                         .proto = proto,
                         .body = bdx,
-                    }},
+                    } },
                 });
 
                 try roots.append(gpa, ndx);
             },
-            .@"let" => {
+            .let => {
                 const power = Op.infixPower(.assign).?;
 
                 const odx = tokens.idx;
-                try tokens.expect(.@"let");
+                try tokens.expect(.let);
                 try tokens.expect(.identifier);
                 try tokens.expect(.@":");
                 const typx = try parseExpr(gpa, tokens, &tree, power.rbp);
@@ -393,7 +377,7 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
                     .extra = .{ .bin_op = .{
                         .lhs = tdx,
                         .rhs = edx,
-                    }},
+                    } },
                 });
 
                 try roots.append(gpa, ndx);
@@ -403,12 +387,12 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
     }
 
     tree.nodes.items[0] = .{
-        .main = @intCast(tokens.list.items.len-1),
+        .main = @intCast(tokens.list.items.len - 1),
         .kind = .root,
         .extra = .{ .list = .{
             .idx = try tree.pushExtraList(roots.items),
             .len = @intCast(roots.items.len),
-        }},
+        } },
     };
 
     return tree;
@@ -430,16 +414,8 @@ fn parseExprPrelude(
     tree: *Ast,
 ) Error!?Node {
     return switch (tokens.next().kind) {
-        .integer => .{
-            .main = tokens.idx - 1,
-            .kind = .integer,
-            .extra = .{ .none = {} }
-        },
-        .identifier => .{
-            .main = tokens.idx - 1,
-            .kind = .identifier,
-            .extra = .{ .none = {} }
-        },
+        .integer => .{ .main = tokens.idx - 1, .kind = .integer, .extra = .{ .none = {} } },
+        .identifier => .{ .main = tokens.idx - 1, .kind = .identifier, .extra = .{ .none = {} } },
         .@"&" => b: {
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.ref).?;
@@ -474,11 +450,11 @@ fn parseExprPrelude(
                     tokens.skip();
                     break;
                 },
-                .@"let" => {
+                .let => {
                     const power = Op.infixPower(.assign).?;
 
                     const ldx = tokens.idx;
-                    try tokens.expect(.@"let");
+                    try tokens.expect(.let);
                     try tokens.expect(.identifier);
                     try tokens.expect(.@":");
                     const typx = try parseExpr(gpa, tokens, tree, power.rbp);
@@ -495,7 +471,7 @@ fn parseExprPrelude(
                         .extra = .{ .bin_op = .{
                             .lhs = tdx,
                             .rhs = edx,
-                        }},
+                        } },
                     });
 
                     try elems.append(gpa, ndx);
@@ -515,10 +491,10 @@ fn parseExprPrelude(
                 .extra = .{ .list = .{
                     .idx = try tree.pushExtraList(elems.items),
                     .len = @intCast(elems.items.len),
-                }},
+                } },
             };
         },
-        .@"destroy" => b: {
+        .destroy => b: {
             const odx = tokens.idx - 1;
             const rbp = Op.prefixPower(.destroy).?;
 
@@ -553,7 +529,7 @@ fn parseExprPrelude(
             var members = ArrayList(u32).empty;
             defer members.deinit(gpa);
 
-            tokens.expect(.@"linear") catch {};
+            tokens.expect(.linear) catch {};
             try tokens.expect(.@"{");
 
             while (true) switch (tokens.peek().kind) {
@@ -582,12 +558,13 @@ fn parseExprPrelude(
                 .extra = .{ .list = .{
                     .idx = try tree.pushExtraList(members.items),
                     .len = @intCast(members.items.len),
-                }},
+                } },
             };
         },
         .@"if" => b: {
             const odx = tokens.idx - 1;
             const chs = try parseExpr(gpa, tokens, tree, 0);
+            try tokens.expect(.@",");
             const lhs = try parseExpr(gpa, tokens, tree, 0);
             try tokens.expect(.@"else");
             const rhs = try parseExpr(gpa, tokens, tree, 0);
@@ -603,7 +580,7 @@ fn parseExprPrelude(
                 .extra = .{ .tri_op = .{
                     .lhs = cnd,
                     .mhs = lnd,
-                }},
+                } },
             };
         },
         else => {
@@ -611,7 +588,6 @@ fn parseExprPrelude(
             return null;
         },
     };
-
 }
 
 fn parseExprBody(
@@ -668,7 +644,7 @@ fn parseExprBody(
                     .extra = .{ .list = .{
                         .idx = try tree.pushExtraList(args.items),
                         .len = @intCast(args.items.len),
-                    }},
+                    } },
                 });
 
                 lhs = .{
@@ -677,7 +653,7 @@ fn parseExprBody(
                     .extra = .{ .fcall = .{
                         .func = lnd,
                         .args = list,
-                    }},
+                    } },
                 };
 
                 continue;
@@ -716,7 +692,7 @@ fn parseExprBody(
                     .extra = .{ .list = .{
                         .idx = try tree.pushExtraList(defs.items),
                         .len = @intCast(defs.items.len),
-                    }},
+                    } },
                 });
 
                 lhs = .{
@@ -725,7 +701,7 @@ fn parseExprBody(
                     .extra = .{ .structlit = .{
                         .head = lnd,
                         .defs = list,
-                    }},
+                    } },
                 };
 
                 continue;
@@ -763,7 +739,7 @@ fn parseExprBody(
                 .extra = .{ .bin_op = .{
                     .lhs = lnd,
                     .rhs = rnd,
-                }},
+                } },
             };
 
             continue;

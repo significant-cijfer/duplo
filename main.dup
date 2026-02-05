@@ -1,50 +1,11 @@
-fn meaning() i32, {
-    return 42;
+fn a(n: u8) u8, {
+    return n * 2;
 };
 
-fn inc(x: i32) i32, {
-    return x + 1;
-};
-
-fn f(x: i32) i32, {
-    let y: i32 = x * 2;
-
-    return x + y;
-};
-
-fn ggez(x: u8) u8, {
-    return x * 10;
+fn b(n: u8) u8, {
+    return n * 3;
 };
 
 fn main() u8, {
-    let x: u8 = if 1 7 else 9;
-
-    return ggez(6) + x;
+    return if 0, { return a(4); }  else b(4);
 };
-
-//let x: type = struct linear {
-//    a: i32,
-//    b: i32
-//};
-//
-//let X: type = struct {
-//    a: x,
-//};
-//
-//let y: i32 = 1;
-//
-//fn main() i32, {
-//    let z: x = x{ .a = 1, .b = 2 };
-//    let z0: X = X{ .a = z };
-//    //let z1: X = X{ .a = z };  //Uncommenting this line will cause a compilation failure
-//
-//    //destroy z;                //Comment z0, and see the affects
-//
-//    let b: i32 = 1;
-//    return b + 2;
-//};
-//
-//fn add(a: i32, b: i32) i32, {
-//    let c: i32 = a + b;
-//    return c;
-//};

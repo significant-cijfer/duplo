@@ -111,7 +111,7 @@ const Builder = struct {
     }
 
     pub fn slice(self: Builder, comptime T: type, idx: Int, len: Int) []const T {
-        return self.listOf(T)[idx..idx+len];
+        return self.listOf(T)[idx .. idx + len];
     }
 
     fn add(self: *Builder, value: anytype) !Int {
@@ -151,11 +151,11 @@ const Builder = struct {
     fn finishBlock(self: *Builder, block: Int, flow: Block.Flow) void {
         const ptr = &self.blocks.items[block];
         const idx = ptr.idx;
-        const last = block == self.blocks.items.len-1;
+        const last = block == self.blocks.items.len - 1;
 
         const end = switch (last) {
             true => self.insts.items.len,
-            false => self.blocks.items[block+1].idx,
+            false => self.blocks.items[block + 1].idx,
         };
 
         ptr.len = @as(Int, @intCast(end)) - idx;
@@ -171,9 +171,9 @@ const Builder = struct {
                     .int => |i| .{ .primitive = .{
                         .bits = i.bits,
                         .sign = i.sign,
-                    }},
+                    } },
                     .function => .{ .word = {} },
-                    else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
+                    else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{@tagName(t)}),
                 };
             },
             else => @compileError("No list exists of type: " ++ @typeName(T)),
@@ -197,10 +197,7 @@ const Builder = struct {
 
     fn auto(self: *Builder, typx: Int) !Int {
         const idx = try self.add(Location{
-            .code = .{
-                .token = @intCast(self.locations.items.len),
-                .temp = true
-            },
+            .code = .{ .token = @intCast(self.locations.items.len), .temp = true },
             .typx = typx,
         });
 
@@ -222,7 +219,9 @@ const Builder = struct {
         const node = tree.at(idx);
         var block = _block;
 
-        errdefer if (error_idx == null) { error_idx = idx ; };
+        errdefer if (error_idx == null) {
+            error_idx = idx;
+        };
 
         switch (node.kind) {
             .root => {
@@ -235,7 +234,7 @@ const Builder = struct {
                 return .{ 0, block };
             },
             .fdecl => {
-                const name = tokens.slice(node.main+1);
+                const name = tokens.slice(node.main + 1);
                 const blok = try self.newBlock();
 
                 const bdx, block = try self.flatten(ctx, tree, tokens, idx, blok, node.extra.fdecl.body);
@@ -294,7 +293,7 @@ const Builder = struct {
                     .src = fdx,
                     .idx = adx,
                     .len = len,
-                }});
+                } });
 
                 return .{ dst, block };
             },
@@ -311,8 +310,7 @@ const Builder = struct {
                 _ = try self.add(Inst{ .put = .{
                     .dst = dst,
                     .src = src,
-                }});
-
+                } });
 
                 return .{ dst, block };
             },
@@ -326,7 +324,7 @@ const Builder = struct {
                 return .{ src, block };
             },
             .vardef => {
-                const name = tokens.slice(node.main+1);
+                const name = tokens.slice(node.main + 1);
                 const symbol = try ctx.get(table, name);
 
                 const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
@@ -338,7 +336,7 @@ const Builder = struct {
                 _ = try self.add(Inst{ .mov = .{
                     .dst = dst,
                     .src = src,
-                }});
+                } });
 
                 return .{ dst, block };
             },
@@ -383,18 +381,12 @@ const Builder = struct {
                 const chs, const c_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.lhs);
 
                 block = try self.newBlock();
-                const lhs, const l_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+0);
-                _ = try self.add(Inst{ .mov = .{
-                    .dst = dst,
-                    .src = lhs
-                }});
+                const lhs, const l_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs + 0);
+                _ = try self.add(Inst{ .mov = .{ .dst = dst, .src = lhs } });
 
                 block = try self.newBlock();
-                const rhs, const r_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+1);
-                _ = try self.add(Inst{ .mov = .{
-                    .dst = dst,
-                    .src = rhs
-                }});
+                const rhs, const r_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs + 1);
+                _ = try self.add(Inst{ .mov = .{ .dst = dst, .src = rhs } });
 
                 block = try self.newBlock();
 
@@ -402,10 +394,10 @@ const Builder = struct {
                     .cond = chs,
                     .lhs = l_block,
                     .rhs = r_block,
-                }});
+                } });
 
-                self.finishBlock(l_block, .{ .jmp = block });
-                self.finishBlock(r_block, .{ .jmp = block });
+                if (lhs != 0) self.finishBlock(l_block, .{ .jmp = block });
+                if (rhs != 0) self.finishBlock(r_block, .{ .jmp = block });
 
                 return .{ dst, block };
             },
@@ -442,7 +434,7 @@ const Builder = struct {
 };
 
 pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct { Builder, Graph } {
-    var builder = Builder {
+    var builder = Builder{
         .allocator = gpa,
         .functions = .empty,
         .locations = .empty,
