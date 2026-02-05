@@ -404,8 +404,8 @@ const Builder = struct {
                     .rhs = r_block,
                 }});
 
-                self.finishBlock(l_block, .{ .jmp = block });
-                self.finishBlock(r_block, .{ .jmp = block });
+                if (lhs != 0) self.finishBlock(l_block, .{ .jmp = block });
+                if (rhs != 0) self.finishBlock(r_block, .{ .jmp = block });
 
                 return .{ dst, block };
             },

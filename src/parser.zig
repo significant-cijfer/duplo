@@ -588,6 +588,7 @@ fn parseExprPrelude(
         .@"if" => b: {
             const odx = tokens.idx - 1;
             const chs = try parseExpr(gpa, tokens, tree, 0);
+            try tokens.expect(.@",");
             const lhs = try parseExpr(gpa, tokens, tree, 0);
             try tokens.expect(.@"else");
             const rhs = try parseExpr(gpa, tokens, tree, 0);

@@ -220,6 +220,9 @@ pub const Context = struct {
         const dst = self.at(Typx, lhs);
         const src = self.at(Typx, rhs);
 
+        if (dst == .noret)
+            return true;
+
         return switch (src) {
             .typx => dst == .typx,
             .noval => dst == .noval,
