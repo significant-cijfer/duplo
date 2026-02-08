@@ -22,17 +22,17 @@ fn main() u8, {
     return if 1, { return ggez(1); } else ggez(6) + x;
 };
 
-//let x: type = struct linear {
-//    a: i32,
-//    b: i32
-//};
-//
-//let X: type = struct {
-//    a: x,
-//};
-//
-//let y: i32 = 1;
-//
+let x: type = struct linear {
+    a: i32,
+    b: i32
+};
+
+let X: type = struct {
+    a: x,
+};
+
+let y: i32 = 1;
+
 //fn main() i32, {
 //    let z: x = x{ .a = 1, .b = 2 };
 //    let z0: X = X{ .a = z };

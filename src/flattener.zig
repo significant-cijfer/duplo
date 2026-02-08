@@ -172,6 +172,7 @@ const Builder = struct {
                         .bits = i.bits,
                         .sign = i.sign,
                     }},
+                    .ct_int,
                     .function => .{ .word = {} },
                     else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
                 };
@@ -329,18 +330,26 @@ const Builder = struct {
                 const name = tokens.slice(node.main+1);
                 const symbol = try ctx.get(table, name);
 
-                const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
+                switch (try ctx.frameStorage(table)) {
+                    .auto => {
+                        const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                const typx = try self.trivialize(Typx, ctx, symbol.typx);
-                const dst = try self.named(name, try self.add(typx));
-                _ = try self.add(dst);
+                        const typx = try self.trivialize(Typx, ctx, symbol.typx);
+                        const dst = try self.named(name, try self.add(typx));
+                        _ = try self.add(dst);
 
-                _ = try self.add(Inst{ .mov = .{
-                    .dst = dst,
-                    .src = src,
-                }});
+                        _ = try self.add(Inst{ .mov = .{
+                            .dst = dst,
+                            .src = src,
+                        }});
 
-                return .{ dst, block };
+                        return .{ dst, block };
+                    },
+                    .root => {
+                        //TODO(high), generate globals into executable
+                        return .{ 0, block };
+                    },
+                }
             },
             .block => {
                 const items = tree.extras(node.extra);

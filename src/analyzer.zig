@@ -181,21 +181,21 @@ pub const Context = struct {
         return t.symbols.putNoClobber(self.allocator, key, symbol);
     }
 
-    fn frameReturns(self: Context, table: Int) !bool {
+    pub fn frameReturns(self: Context, table: Int) !bool {
         const t = self.tables.get(table)
             orelse return error.UndefinedTable;
 
         return t.frame.ret != 0;
     }
 
-    fn frameBreaks(self: Context, table: Int) !bool {
+    pub fn frameBreaks(self: Context, table: Int) !bool {
         const t = self.tables.get(table)
             orelse return error.UndefinedTable;
 
         return t.frame.brk != 0;
     }
 
-    fn frameStorage(self: Context, table: Int) !Storage {
+    pub fn frameStorage(self: Context, table: Int) !Storage {
         const t = self.tables.get(table)
             orelse return error.UndefinedTable;
 
@@ -330,7 +330,7 @@ pub const Context = struct {
                 return self.add(Typx{ .function = .{
                     .names = try self.addSlice(names.items),
                     .items = try self.addSlice(items.items),
-                    .len = @intCast(items.items.len),
+                    .len = @intCast(names.items.len),
                     .ret = rdx,
                 }});
             },
@@ -366,6 +366,9 @@ pub const Context = struct {
                 //TODO, update status of linear types
 
                 return symbol.typx;
+            },
+            .structdef => {
+                return self.add(Typx.TYPE);
             },
             .vardef => {
                 const name = tokens.slice(node.main+1);
@@ -472,6 +475,31 @@ pub const Context = struct {
                     else => |c| c,
                 };
             },
+            .structdef => {
+                var names = ArrayList(u32).empty;
+                var items = ArrayList(u32).empty;
+
+                defer names.deinit(self.allocator);
+                defer items.deinit(self.allocator);
+
+                const members = tree.extras(node.extra);
+
+                for (members) |mdx| {
+                    const con = try self.eval(tree, tokens, table, mdx);
+                    const tdx = self.at(Constant, con).typx;
+
+                    try names.append(self.allocator, tree.at(mdx).main - 2);
+                    try items.append(self.allocator, tdx);
+                }
+
+                const typx = try self.add(Constant{ .struc = .{
+                    .names = try self.addSlice(names.items),
+                    .items = try self.addSlice(items.items),
+                    .len = @intCast(names.items.len),
+                }});
+
+                return self.add(Constant{ .typx = typx });
+            },
             .add, .sub, .mul, .div => {
                 const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
                 const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs);
@@ -551,6 +579,10 @@ pub const Typx = union(enum) {
         items: Int,
         len: Int,
         ret: Vdx,
+    };
+
+    const TYPE = Typx{
+        .typx = {},
     };
 
     const NOVAL = Typx{
