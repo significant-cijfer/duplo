@@ -195,6 +195,13 @@ pub const Context = struct {
         return t.frame.brk != 0;
     }
 
+    fn frameStorage(self: Context, table: Int) !Storage {
+        const t = self.tables.get(table)
+            orelse return error.UndefinedTable;
+
+        return t.storage;
+    }
+
     fn returnable(self: Context, table: Int, typx: Int) !bool {
         const t = self.tables.get(table)
             orelse return error.UndefinedTable;
@@ -364,7 +371,10 @@ pub const Context = struct {
                 const name = tokens.slice(node.main+1);
 
                 const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
-                const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs);
+                const rev = switch (try self.frameStorage(table)) {
+                    .auto => 0,
+                    .root => try self.eval(tree, tokens, table, node.extra.bin_op.rhs),
+                };
 
                 const ldx = self.at(Constant, lev).typx;
                 const rdx = try self.examine(tree, tokens, table, node.extra.bin_op.rhs);
@@ -463,25 +473,18 @@ pub const Context = struct {
                 };
             },
             .add, .sub, .mul, .div => {
-                const lev = self.eval(tree, tokens, table, node.extra.bin_op.lhs) catch |err| return switch (err) {
-                    error.RuntimeEval => 0,
-                    else => err,
-                };
-
-                const rev = self.eval(tree, tokens, table, node.extra.bin_op.rhs) catch |err| return switch (err) {
-                    error.RuntimeEval => 0,
-                    else => err,
-                };
+                const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
+                const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs);
 
                 _ = lev;
                 _ = rev;
 
                 //TODO, implement comptime arith
-                return 0;
+                return error.RuntimeEval;
             },
             .ternary => {
                 //TODO, implement
-                return 0;
+                return error.RuntimeEval;
             },
             else => {
                 std.debug.panic("eval: {}", .{node.kind});
