@@ -187,8 +187,7 @@ const Builder = struct {
         ptr.flow = flow;
     }
 
-    //TODO(high), figure out a way to not have to use names when trivializing functions
-    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
+    fn trivialize(self: *Builder, ctx: Context, typx: Int) !Typx {
         return switch (ctx.at(ATypx, typx)) {
             .int => |i| .{ .primitive = .{
                 .bits = i.bits,
@@ -200,12 +199,12 @@ const Builder = struct {
                 const pdx, const items = try self.newSlice(Typx, f.len);
 
                 for (p_items, items) |src, *dst|
-                    dst.* = try self.trivialize(ctx, tokens, src);
+                    dst.* = try self.trivialize(ctx, src);
 
                 return .{ .function = .{
                     .prms = pdx,
                     .len = f.len,
-                    .ret = try self.add(try self.trivialize(ctx, tokens, f.ret)),
+                    .ret = try self.add(try self.trivialize(ctx, f.ret)),
                 }};
             },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
@@ -280,7 +279,7 @@ const Builder = struct {
                                     .token = try self.add(name),
                                     .temp = false,
                                 },
-                                .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
+                                .typx = try self.add(try self.trivialize(ctx, symbol.typx)),
                             },
                         });
                     },
@@ -309,7 +308,7 @@ const Builder = struct {
                             .token = try self.add(tokens.slice(src)),
                             .temp = false,
                         },
-                        .typx = try self.add(try self.trivialize(ctx, tokens, item)),
+                        .typx = try self.add(try self.trivialize(ctx, item)),
                     };
                 }
 
@@ -320,7 +319,7 @@ const Builder = struct {
                             .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.add(try self.trivialize(ctx, tokens, proto.ret)),
+                        .ret = try self.add(try self.trivialize(ctx, proto.ret)),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -378,7 +377,7 @@ const Builder = struct {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
 
-                const typx = try self.trivialize(ctx, tokens, symbol.typx);
+                const typx = try self.trivialize(ctx, symbol.typx);
                 const src = try self.named(name, try self.add(typx));
 
                 return .{ src, block };
@@ -391,7 +390,7 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const typx = try self.trivialize(ctx, tokens, symbol.typx);
+                        const typx = try self.trivialize(ctx, symbol.typx);
                         const dst = try self.named(name, try self.add(typx));
                         _ = try self.add(dst);
 
