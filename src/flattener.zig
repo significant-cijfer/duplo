@@ -12,14 +12,12 @@ const Graph = lego.Graph;
 const Function = lego.Function;
 const Location = lego.Location;
 const Constant = lego.Constant;
-const Callable = lego.Callable;
 const Block = lego.Block;
 const Inst = lego.Inst;
 const Typx = lego.Typx;
 
 const BigInt = lego.BigInt;
 const StringList = lego.StringList;
-const CallList = lego.CallList;
 const LocationList = lego.LocationList;
 const LocationExtraList = lego.LocationExtraList;
 
@@ -44,7 +42,6 @@ const Builder = struct {
     functions: ArrayList(Function),
     locations: ArrayList(Location),
     constants: ArrayList(Constant),
-    callables: ArrayList(Callable),
     manageds: ArrayList(Managed),
     strings: ArrayList([]const u8),
     blocks: ArrayList(Block),
@@ -66,7 +63,7 @@ const Builder = struct {
     };
 
     const Extern = struct {
-        callable: Int,
+        local: Location,
     };
 
     const Varb = struct {
@@ -86,7 +83,6 @@ const Builder = struct {
         self.functions.deinit(self.allocator);
         self.locations.deinit(self.allocator);
         self.constants.deinit(self.allocator);
-        self.callables.deinit(self.allocator);
         self.manageds.deinit(self.allocator);
         self.strings.deinit(self.allocator);
         self.blocks.deinit(self.allocator);
@@ -104,8 +100,7 @@ const Builder = struct {
             Function => self.functions.items,
             Location => self.locations.items,
             Constant => self.constants.items,
-            Callable => self.callables.items,
-            Managed => self.manages.items,
+            Managed => self.manageds.items,
             []const u8 => self.strings.items,
             Block => self.blocks.items,
             Inst => self.insts.items,
@@ -123,7 +118,6 @@ const Builder = struct {
             Function => &self.functions,
             Location => &self.locations,
             Constant => &self.constants,
-            Callable => &self.callables,
             Managed => &self.manageds,
             []const u8 => &self.strings,
             Block => &self.blocks,
@@ -194,7 +188,7 @@ const Builder = struct {
     }
 
     //TODO(high), figure out a way to not have to use names when trivializing functions
-    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, name: Int, typx: Int) !Typx {
+    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
         return switch (ctx.at(ATypx, typx)) {
             .int => |i| .{ .primitive = .{
                 .bits = i.bits,
@@ -202,19 +196,17 @@ const Builder = struct {
             }},
             .ct_int => .{ .word = {} },
             .function => |f| {
-                const p_names = ctx.slice(Int, f.names, f.len);
                 const p_items = ctx.slice(Int, f.items, f.len);
                 const pdx, const items = try self.newSlice(Typx, f.len);
 
-                for (p_names, p_items, items) |ndx, src, *dst|
-                    dst.* = try self.trivialize(ctx, tokens, ndx, src);
+                for (p_items, items) |src, *dst|
+                    dst.* = try self.trivialize(ctx, tokens, src);
 
-                return .{ .function = try self.add(Callable{
-                    .name = name,
+                return .{ .function = .{
                     .prms = pdx,
                     .len = f.len,
-                    .ret = try self.add(try self.trivialize(ctx, tokens, undefined, f.ret)),
-                }) };
+                    .ret = try self.add(try self.trivialize(ctx, tokens, f.ret)),
+                }};
             },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
         };
@@ -282,11 +274,14 @@ const Builder = struct {
                         const name = tokens.slice(node.main+2);
                         const symbol = try ctx.get(table, name);
 
-                        const ndx = try self.add(name);
-                        const cdx = try self.trivialize(ctx, tokens, ndx, symbol.typx);
-
                         _ = try self.add(Extern{
-                            .callable = try self.add(cdx),
+                            .local = .{
+                                .code = .{
+                                    .token = try self.add(name),
+                                    .temp = false,
+                                },
+                                .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
+                            },
                         });
                     },
                     else => |k| std.debug.panic("TODO: handle edecl: {}", .{k}),
@@ -303,27 +298,29 @@ const Builder = struct {
 
                 const symbol = try ctx.get(table, name);
                 const proto = ctx.at(ATypx, symbol.typx).function;
-                const p_names = ctx.slice(Int, proto.names, proto.len);
-                const p_items = ctx.slice(Int, proto.items, proto.len);
+                const names = ctx.slice(Int, proto.names, proto.len);
+                const items = ctx.slice(Int, proto.items, proto.len);
 
-                const ndx, const names = try self.newSlice([]const u8, proto.len);
-                const pdx, const items = try self.newSlice(Typx, proto.len);
+                const ldx, const prms = try self.newSlice(Location, proto.len);
 
-                for (p_names, names) |src, *dst|
-                    dst.* = tokens.slice(src);
-
-                for (p_names, p_items, items) |prm, src, *dst|
-                    dst.* = try self.trivialize(ctx, tokens, prm, src);
+                for (names, items, prms) |src, item, *dst| {
+                    dst.* = .{
+                        .code = .{
+                            .token = try self.add(tokens.slice(src)),
+                            .temp = false,
+                        },
+                        .typx = try self.add(try self.trivialize(ctx, tokens, item)),
+                    };
+                }
 
                 _ = try self.add(Function{
                     .ident = try self.add(name),
                     .proto = .{
                         .prms = .{
-                            .names = ndx,
-                            .items = pdx,
+                            .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.add(try self.trivialize(ctx, tokens, undefined, proto.ret)),
+                        .ret = try self.add(try self.trivialize(ctx, tokens, proto.ret)),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -337,8 +334,7 @@ const Builder = struct {
 
                 const loc = self.at(Location, fdx);
                 const fun = self.at(Typx, loc.typx).function;
-                const cbl = self.at(Callable, fun);
-                const dst = try self.auto(cbl.ret);
+                const dst = try self.auto(fun.ret);
 
                 const list = tree.at(call.args);
                 const items = tree.extras(list.extra);
@@ -381,9 +377,8 @@ const Builder = struct {
             .identifier => {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
-                const ndx = try self.add(name);
 
-                const typx = try self.trivialize(ctx, tokens, ndx, symbol.typx);
+                const typx = try self.trivialize(ctx, tokens, symbol.typx);
                 const src = try self.named(name, try self.add(typx));
 
                 return .{ src, block };
@@ -396,7 +391,7 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const typx = try self.trivialize(ctx, tokens, try self.add(name), symbol.typx);
+                        const typx = try self.trivialize(ctx, tokens, symbol.typx);
                         const dst = try self.named(name, try self.add(typx));
                         _ = try self.add(dst);
 
@@ -493,14 +488,14 @@ const Builder = struct {
     fn emit(self: *Builder) !struct { Builder, Graph } {
         var names = ArrayList([]const u8).empty;
         var typxs = ArrayList(Typx).empty;
-        var calls = ArrayList(Callable).empty;
-        var locs = ArrayList(Location).empty;
+        var e_locs = ArrayList(Location).empty;
+        var v_locs = ArrayList(Location).empty;
         var cons = ArrayList(Constant).empty;
 
         defer names.deinit(self.allocator);
         defer typxs.deinit(self.allocator);
-        defer calls.deinit(self.allocator);
-        defer locs.deinit(self.allocator);
+        defer e_locs.deinit(self.allocator);
+        defer v_locs.deinit(self.allocator);
         defer cons.deinit(self.allocator);
 
         for (self.root.imports.items) |import| {
@@ -509,11 +504,11 @@ const Builder = struct {
         }
 
         for (self.root.externs.items) |ext| {
-            try calls.append(self.allocator, self.at(Callable, ext.callable));
+            try e_locs.append(self.allocator, ext.local);
         }
 
         for (self.root.varbs.items) |varb| {
-            try locs.append(self.allocator, self.at(Location, varb.local));
+            try v_locs.append(self.allocator, self.at(Location, varb.local));
         }
 
         const imports = StringList{
@@ -522,13 +517,13 @@ const Builder = struct {
             .len = @intCast(self.root.imports.items.len),
         };
 
-        const externs = CallList{
-            .items = try self.addSlice(calls.items),
+        const externs = LocationList{
+            .items = try self.addSlice(e_locs.items),
             .len = @intCast(self.root.externs.items.len),
         };
 
         const varbs = LocationExtraList{
-            .items = try self.addSlice(locs.items),
+            .items = try self.addSlice(v_locs.items),
             .extra = try self.addSlice(cons.items),
             .len = @intCast(self.root.varbs.items.len),
         };
@@ -537,7 +532,6 @@ const Builder = struct {
             .functions = self.functions.items,
             .locations = self.locations.items,
             .constants = self.constants.items,
-            .callables = self.callables.items,
             .strings = self.strings.items,
             .blocks = self.blocks.items,
             .insts = self.insts.items,
@@ -559,7 +553,6 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .functions = .empty,
         .locations = .empty,
         .constants = .empty,
-        .callables = .empty,
         .manageds = .empty,
         .strings = .empty,
         .blocks = .empty,
