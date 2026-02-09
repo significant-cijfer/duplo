@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const parseInt = std.fmt.parseInt;
+const activeTag = std.meta.activeTag;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -31,6 +32,7 @@ const Error = error {
     IncompatibleTypes,
     NonIntegerTerm,
     UncallableTerm,
+    UndereferenceableTerm,
 }
     || Allocator.Error
     || std.fmt.ParseIntError
@@ -81,6 +83,10 @@ pub const Context = struct {
             } }) }),
         });
 
+        try context.put(0, "void", .{
+            .typx = try context.add(Typx{ .typx = {} }),
+            .con = try context.add(Constant{ .typx = try context.add(Typx{ .noval = {} }) }),
+        });
         try context.put(0, "type", .{
             .typx = try context.add(Typx{ .typx = {} }),
             .con = try context.add(Constant{ .typx = try context.add(Typx{ .typx = {} }) }),
@@ -223,27 +229,49 @@ pub const Context = struct {
     }
 
     //NOTE, rhs has to "transform" into lhs
+    fn equals(self: Context, lhs: Int, rhs: Int) bool {
+        const dst = self.at(Typx, lhs);
+        const src = self.at(Typx, rhs);
+
+        if (activeTag(dst) != activeTag(src))
+            return false;
+
+        return switch (src) {
+            .typx => true,
+            .noval => true,
+            .noret => true,
+            .undef => true,
+            .ct_int => true,
+            .int => |s| dst.int.sign == s.sign and dst.int.bits == s.bits,
+            .pointer => |p| self.equals(dst.pointer, p),
+            else => std.debug.panic("TODO, handle equals: {}", .{src}),
+        };
+    }
+
+    //NOTE, rhs has to "transform" into lhs
     fn castable(self: Context, lhs: Int, rhs: Int) bool {
         const dst = self.at(Typx, lhs);
         const src = self.at(Typx, rhs);
 
-        if (dst == .noret)
+        if (dst == .noret or src == .noret)
+            return true;
+
+        if (self.equals(lhs, rhs))
             return true;
 
         return switch (src) {
-            .typx => dst == .typx,
-            .noval => dst == .noval,
-            .noret => true,
-            .undef => dst == .undef,
             .ct_int => switch (dst) {
-                .ct_int, .int => true,
+                .int => true,
                 else => false,
             },
             .int => |s| switch (dst) {
                 .int => |d| d.sign == s.sign and d.bits >= s.bits,
                 else => false,
             },
-            else => @panic("TODO"),
+            .pointer => {
+                std.debug.panic("lhs: {}, rhs: {}", .{self.at(Typx, dst.pointer), self.at(Typx, src.pointer)});
+            },
+            else => std.debug.panic("TODO, handle castable: {}", .{src}),
         };
     }
 
@@ -437,6 +465,30 @@ pub const Context = struct {
 
                 return ldx;
             },
+            .ref => {
+                const mdx = try self.examine(tree, tokens, table, node.extra.mon_op);
+
+                return self.add(Typx{ .pointer = mdx });
+            },
+            .deref => {
+                const mdx = try self.examine(tree, tokens, table, node.extra.mon_op);
+
+                const pdx = switch (self.at(Typx, mdx)) {
+                    .pointer => |p| p,
+                    else => return error.UndereferenceableTerm,
+                };
+
+                return pdx;
+            },
+            .assign => {
+                const ldx = try self.examine(tree, tokens, table, node.extra.bin_op.lhs);
+                const rdx = try self.examine(tree, tokens, table, node.extra.bin_op.rhs);
+
+                if (!self.castable(ldx, rdx))
+                    return error.IncompatibleTypes;
+
+                return ldx;
+            },
             .ternary => {
                 const cdx = try self.examine(tree, tokens, table, node.extra.tri_op.lhs);
                 const ldx = try self.examine(tree, tokens, table, node.extra.tri_op.mhs+0);
@@ -461,7 +513,7 @@ pub const Context = struct {
 
                 return self.add(Typx.NORET);
             },
-            else => @panic("TODO"),
+            else => |k| std.debug.panic("TODO, handle flatten: {}", .{k}),
         }
     }
 
@@ -521,6 +573,15 @@ pub const Context = struct {
                 //TODO, implement comptime arith
                 return error.RuntimeEval;
             },
+            .ref => {
+                const cdx = try self.eval(tree, tokens, table, node.extra.mon_op);
+                const con = self.at(Constant, cdx);
+
+                return switch (con) {
+                    .typx => |t| self.add(Constant{ .typx = try self.add(Typx{ .pointer = t }) }),
+                    else => std.debug.panic("TODO, handle con.kind: {}", .{con}),
+                };
+            },
             .ternary => {
                 //TODO, implement
                 return error.RuntimeEval;
@@ -572,6 +633,7 @@ pub const Typx = union(enum) {
     ct_int: void,
     int: Integer,
     struc: Struct,
+    pointer: Pointer,
     function: Function,
 
     const Integer = struct {
@@ -584,6 +646,8 @@ pub const Typx = union(enum) {
         items: Int,
         len: Int,
     };
+
+    const Pointer = Int;
 
     const Function = struct {
         names: Int,

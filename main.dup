@@ -1,5 +1,8 @@
 extern fn echo() i32;
-extern fn putchar(c: i32) i32;
+extern fn putchar(c: i32) void;
+
+extern fn boxInt(x: i32) &i32;
+extern fn boxPrint(p: &i32) void;
 
 fn meaning() i32, {
     return 42;
@@ -21,6 +24,13 @@ fn ggez(x: u8) u8, {
 
 fn main() u8, {
     let x: u8 = if 1, 7 else 9;
+
+    let bint: &i32 = boxInt(10);
+    *bint = 20;
+    boxPrint(bint);
+
+    let lint: i32 = 30;
+    boxPrint(&lint);
 
     putchar(65);
 

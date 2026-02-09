@@ -35,6 +35,13 @@ const ATypx = Analyzer.Typx;
 const Int = u32;
 const Vdx = u32;
 
+const Error = error {
+    UndefinedTable,
+    UndefinedKey,
+}
+    || Allocator.Error
+    || std.fmt.ParseIntError;
+
 pub var error_idx: ?Int = null;
 
 const Builder = struct {
@@ -74,6 +81,12 @@ const Builder = struct {
     const State = struct {
         Vdx, // location
         Int, // block
+    };
+
+    const StateEffect = struct {
+        Vdx, // location
+        Int, // block
+        bool, // direct
     };
 
     pub fn deinit(self: *Builder) void {
@@ -189,22 +202,35 @@ const Builder = struct {
 
     fn trivialize(self: *Builder, ctx: Context, typx: Int) !Typx {
         return switch (ctx.at(ATypx, typx)) {
+            .noval => .{ .noval = {} },
             .int => |i| .{ .primitive = .{
                 .bits = i.bits,
                 .sign = i.sign,
             }},
             .ct_int => .{ .word = {} },
+            .pointer => |p| {
+                const child = try self.add(try self.trivialize(ctx, p));
+
+                return .{ .pointer = try self.temp(child) };
+            },
             .function => |f| {
                 const p_items = ctx.slice(Int, f.items, f.len);
-                const pdx, const items = try self.newSlice(Typx, f.len);
+                const typxs = try self.allocator.alloc(Int, f.len);
+                defer self.allocator.free(typxs);
 
-                for (p_items, items) |src, *dst|
-                    dst.* = try self.trivialize(ctx, src);
+                for (p_items, typxs) |src, *dst|
+                    dst.* = try self.add(try self.trivialize(ctx, src));
+
+                const ret = try self.add(try self.trivialize(ctx, f.ret));
+                const pdx: Int = @intCast(self.locations.items.len);
+
+                for (typxs) |t|
+                    _ = try self.temp(t);
 
                 return .{ .function = .{
                     .prms = pdx,
                     .len = f.len,
-                    .ret = try self.add(try self.trivialize(ctx, f.ret)),
+                    .ret = try self.temp(ret),
                 }};
             },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
@@ -226,14 +252,18 @@ const Builder = struct {
         };
     }
 
-    fn auto(self: *Builder, typx: Int) !Int {
-        const idx = try self.add(Location{
+    fn temp(self: *Builder, typx: Int) !Int {
+        return self.add(Location{
             .code = .{
                 .token = @intCast(self.locations.items.len),
-                .temp = true
+                .temp = true,
             },
             .typx = typx,
         });
+    }
+
+    fn auto(self: *Builder, typx: Int) !Int {
+        const idx = try self.temp(typx);
 
         _ = try self.add(idx);
         return idx;
@@ -249,7 +279,28 @@ const Builder = struct {
         });
     }
 
-    fn flatten(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) !State {
+    fn lvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!StateEffect {
+        const node = tree.at(idx);
+        var block = _block;
+
+        errdefer if (error_idx == null) { error_idx = idx ; };
+
+        switch (node.kind) {
+            .identifier => {
+                const src, block = try self.rvalue(ctx, tree, tokens, table, block, idx);
+
+                return .{ src, block, true };
+            },
+            .deref => {
+                const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.mon_op);
+
+                return .{ src, block, false };
+            },
+            else => std.debug.panic("TODO, handle lvalue: {}", .{node.kind}),
+        }
+    }
+
+    fn rvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!State {
         const node = tree.at(idx);
         var block = _block;
 
@@ -260,7 +311,7 @@ const Builder = struct {
                 const items = tree.extras(node.extra);
 
                 for (items) |item| {
-                    _, block = try self.flatten(ctx, tree, tokens, table, block, item);
+                    _, block = try self.rvalue(ctx, tree, tokens, table, block, item);
                 }
 
                 return .{ 0, block };
@@ -292,7 +343,7 @@ const Builder = struct {
                 const name = tokens.slice(node.main+1);
                 const blok = try self.newBlock();
 
-                const bdx, block = try self.flatten(ctx, tree, tokens, idx, blok, node.extra.fdecl.body);
+                const bdx, block = try self.rvalue(ctx, tree, tokens, idx, blok, node.extra.fdecl.body);
                 _ = bdx;
 
                 const symbol = try ctx.get(table, name);
@@ -329,11 +380,12 @@ const Builder = struct {
             },
             .fcall => {
                 const call = node.extra.fcall;
-                const fdx, block = try self.flatten(ctx, tree, tokens, table, block, call.func);
+                const fdx, block = try self.rvalue(ctx, tree, tokens, table, block, call.func);
 
                 const loc = self.at(Location, fdx);
                 const fun = self.at(Typx, loc.typx).function;
-                const dst = try self.auto(fun.ret);
+                const ret = self.at(Location, fun.ret);
+                const dst = try self.auto(ret.typx);
 
                 const list = tree.at(call.args);
                 const items = tree.extras(list.extra);
@@ -342,7 +394,7 @@ const Builder = struct {
                 const adx, const args = try self.newSlice(Location, len);
 
                 for (items, args) |src, *arg| {
-                    const ldx, block = try self.flatten(ctx, tree, tokens, table, block, src);
+                    const ldx, block = try self.rvalue(ctx, tree, tokens, table, block, src);
                     arg.* = self.at(Location, ldx);
                 }
 
@@ -388,7 +440,7 @@ const Builder = struct {
 
                 switch (try ctx.frameStorage(table)) {
                     .auto => {
-                        const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
+                        const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
                         const typx = try self.trivialize(ctx, symbol.typx);
                         const dst = try self.named(name, try self.add(typx));
@@ -411,14 +463,14 @@ const Builder = struct {
                 const items = tree.extras(node.extra);
 
                 for (items) |item| {
-                    _, block = try self.flatten(ctx, tree, tokens, idx, block, item);
+                    _, block = try self.rvalue(ctx, tree, tokens, idx, block, item);
                 }
 
                 return .{ 0, block };
             },
             .add, .sub, .mul, .div => {
-                const lhs, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.lhs);
-                const rhs, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
+                const lhs, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.lhs);
+                const rhs, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
                 const loc = self.at(Location, lhs);
                 const dst = try self.auto(loc.typx);
@@ -441,21 +493,53 @@ const Builder = struct {
 
                 return .{ dst, block };
             },
+            .ref => {
+                const src, block, _ = try self.lvalue(ctx, tree, tokens, table, block, node.extra.mon_op);
+
+                const ptr = try self.add(Typx{ .pointer = src });
+                const dst = try self.auto(ptr);
+
+                _ = try self.add(Inst{ .ref = .{
+                    .dst = dst,
+                    .src = src,
+                }});
+
+                return .{ dst, block };
+            },
+            .assign => {
+                const dst, block, const direct = try self.lvalue(ctx, tree, tokens, table, block, node.extra.bin_op.lhs);
+                const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
+
+                const inst = if (direct)
+                    Inst{ .mov = .{
+                        .dst = dst,
+                        .src = src,
+                    }}
+                else
+                    Inst{ .set = .{
+                        .dst = dst,
+                        .src = src,
+                    }};
+
+                _ = try self.add(inst);
+
+                return .{ src, block };
+            },
             .ternary => {
                 //TODO, figure out actual ternary type
                 const dst = try self.auto(try self.add(Typx{ .word = {} }));
 
-                const chs, const c_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.lhs);
+                const chs, const c_block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.tri_op.lhs);
 
                 block = try self.newBlock();
-                const lhs, const l_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+0);
+                const lhs, const l_block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+0);
                 _ = try self.add(Inst{ .mov = .{
                     .dst = dst,
                     .src = lhs
                 }});
 
                 block = try self.newBlock();
-                const rhs, const r_block = try self.flatten(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+1);
+                const rhs, const r_block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+1);
                 _ = try self.add(Inst{ .mov = .{
                     .dst = dst,
                     .src = rhs
@@ -475,12 +559,12 @@ const Builder = struct {
                 return .{ dst, block };
             },
             .ret => {
-                const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.mon_op);
+                const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.mon_op);
                 self.finishBlock(block, .{ .ret = src });
 
                 return .{ 0, block };
             },
-            else => std.debug.panic("TODO, handle flatten: {}", .{node.kind}),
+            else => std.debug.panic("TODO, handle rvalue: {}", .{node.kind}),
         }
     }
 
@@ -565,8 +649,7 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         },
     };
 
-    const flow = try builder.flatten(ctx, tree, tokens, 0, 0, 0);
-    _ = flow;
+    _ = try builder.rvalue(ctx, tree, tokens, 0, 0, 0);
 
     return builder.emit();
 }
