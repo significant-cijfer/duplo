@@ -162,6 +162,7 @@ pub const Node = struct {
 
     const Kind = enum {
         root, //list
+        edecl, //mo
         fdecl, //fdecl
         fcall, //fcall
         fproto, //fproto
@@ -307,65 +308,38 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
     while (true) {
         switch (tokens.peek().kind) {
             .eof => break,
+            .@"extern" => {
+                const odx = tokens.idx;
+
+                try tokens.expect(.@"extern");
+                const proto = try parseProto(gpa, tokens, &tree);
+                try tokens.expect(.@";");
+
+                const pdx = try tree.pushNode(proto);
+                const ndx = try tree.pushNode(.{
+                    .main = odx,
+                    .kind = .edecl,
+                    .extra = .{ .mon_op = pdx },
+                });
+
+                try roots.append(gpa, ndx);
+            },
             .@"fn" => {
                 const odx = tokens.idx;
-                try tokens.expect(.@"fn");
-                try tokens.expect(.identifier);
-                try tokens.expect(.@"(");
 
-                var prms = ArrayList(u32).empty;
-                defer prms.deinit(gpa);
-
-                while (true) switch (tokens.peek().kind) {
-                    .@")" => {
-                        tokens.skip();
-                        break;
-                    },
-                    else => {
-                        try tokens.expect(.identifier);
-                        try tokens.expect(.@":");
-                        const typ = try parseExpr(gpa, tokens, &tree, 0);
-                        const tnd = try tree.pushNode(typ);
-                        try prms.append(gpa, tnd);
-
-                        switch (tokens.next().kind) {
-                            .@"," => {},
-                            .@")" => break,
-                            else => return error.UnexpectedToken,
-                        }
-                    },
-                };
-
-                const rtyp = try parseExpr(gpa, tokens, &tree, 0);
+                const proto = try parseProto(gpa, tokens, &tree);
                 try tokens.expect(.@",");
                 const body = try parseExpr(gpa, tokens, &tree, 0);
                 try tokens.expect(.@";");
 
-                const qrms = try tree.pushNode(.{
-                    .main = odx + 2,
-                    .kind = .list,
-                    .extra = .{ .list = .{
-                        .idx = try tree.pushExtraList(prms.items),
-                        .len = @intCast(prms.items.len),
-                    }},
-                });
-
-                const proto = try tree.pushNode(.{
-                    .main = odx + 2,
-                    .kind = .fproto,
-                    .extra = .{ .fproto = .{
-                        .prms = qrms,
-                        .rtyp = try tree.pushNode(rtyp),
-                    }},
-                });
-
+                const pdx = try tree.pushNode(proto);
                 const bdx = try tree.pushNode(body);
 
                 const ndx = try tree.pushNode(.{
                     .main = odx,
                     .kind = .fdecl,
                     .extra = .{ .fdecl = .{
-                        .proto = proto,
+                        .proto = pdx,
                         .body = bdx,
                     }},
                 });
@@ -412,6 +386,57 @@ pub fn parse(gpa: Allocator, tokens: *Tokens) !Ast {
     };
 
     return tree;
+}
+
+fn parseProto(gpa: Allocator, tokens: *Tokens, tree: *Ast) Error!Node {
+    const odx = tokens.idx;
+
+    try tokens.expect(.@"fn");
+    try tokens.expect(.identifier);
+    try tokens.expect(.@"(");
+
+    var prms = ArrayList(u32).empty;
+    defer prms.deinit(gpa);
+
+    while (true) switch (tokens.peek().kind) {
+        .@")" => {
+            tokens.skip();
+            break;
+        },
+        else => {
+            try tokens.expect(.identifier);
+            try tokens.expect(.@":");
+            const typ = try parseExpr(gpa, tokens, tree, 0);
+            const tnd = try tree.pushNode(typ);
+            try prms.append(gpa, tnd);
+
+            switch (tokens.next().kind) {
+                .@"," => {},
+                .@")" => break,
+                else => return error.UnexpectedToken,
+            }
+        },
+    };
+
+    const qrms = try tree.pushNode(.{
+        .main = odx + 2,
+        .kind = .list,
+        .extra = .{ .list = .{
+            .idx = try tree.pushExtraList(prms.items),
+            .len = @intCast(prms.items.len),
+        }},
+    });
+
+    const rtyp = try parseExpr(gpa, tokens, tree, 0);
+
+    return .{
+        .main = odx + 2,
+        .kind = .fproto,
+        .extra = .{ .fproto = .{
+            .prms = qrms,
+            .rtyp = try tree.pushNode(rtyp),
+        }},
+    };
 }
 
 fn parseExpr(

@@ -1,3 +1,6 @@
+extern fn echo() i32;
+extern fn putchar(c: i32) i32;
+
 fn meaning() i32, {
     return 42;
 };
@@ -18,6 +21,8 @@ fn ggez(x: u8) u8, {
 
 fn main() u8, {
     let x: u8 = if 1, 7 else 9;
+
+    putchar(65);
 
     return if 1, { return ggez(1); } else ggez(6) + x;
 };

@@ -12,11 +12,14 @@ const Graph = lego.Graph;
 const Function = lego.Function;
 const Location = lego.Location;
 const Constant = lego.Constant;
+const Callable = lego.Callable;
 const Block = lego.Block;
 const Inst = lego.Inst;
 const Typx = lego.Typx;
 
 const BigInt = lego.BigInt;
+const StringList = lego.StringList;
+const CallList = lego.CallList;
 const LocationList = lego.LocationList;
 const LocationExtraList = lego.LocationExtraList;
 
@@ -41,6 +44,7 @@ const Builder = struct {
     functions: ArrayList(Function),
     locations: ArrayList(Location),
     constants: ArrayList(Constant),
+    callables: ArrayList(Callable),
     manageds: ArrayList(Managed),
     strings: ArrayList([]const u8),
     blocks: ArrayList(Block),
@@ -51,7 +55,23 @@ const Builder = struct {
     root: Root,
 
     const Root = struct {
-        varbs: StringHashMap(Int),
+        imports: ArrayList(Import),
+        externs: ArrayList(Extern),
+        varbs: ArrayList(Varb),
+    };
+
+    const Import = struct {
+        name: Int,
+        typx: Int,
+    };
+
+    const Extern = struct {
+        callable: Int,
+    };
+
+    const Varb = struct {
+        name: Int,
+        local: Int,
     };
 
     const State = struct {
@@ -66,6 +86,7 @@ const Builder = struct {
         self.functions.deinit(self.allocator);
         self.locations.deinit(self.allocator);
         self.constants.deinit(self.allocator);
+        self.callables.deinit(self.allocator);
         self.manageds.deinit(self.allocator);
         self.strings.deinit(self.allocator);
         self.blocks.deinit(self.allocator);
@@ -73,6 +94,8 @@ const Builder = struct {
         self.typxs.deinit(self.allocator);
         self.local.deinit(self.allocator);
 
+        self.root.imports.deinit(self.allocator);
+        self.root.externs.deinit(self.allocator);
         self.root.varbs.deinit(self.allocator);
     }
 
@@ -81,12 +104,16 @@ const Builder = struct {
             Function => self.functions.items,
             Location => self.locations.items,
             Constant => self.constants.items,
+            Callable => self.callables.items,
             Managed => self.manages.items,
             []const u8 => self.strings.items,
             Block => self.blocks.items,
             Inst => self.insts.items,
             Typx => self.typxs.items,
             Int => self.local.items,
+            Import => self.root.imports.items,
+            Extern => self.root.externs.items,
+            Varb => self.root.varbs.items,
             else => @compileError("No list exists of type: " ++ @typeName(T)),
         };
     }
@@ -96,12 +123,16 @@ const Builder = struct {
             Function => &self.functions,
             Location => &self.locations,
             Constant => &self.constants,
+            Callable => &self.callables,
             Managed => &self.manageds,
             []const u8 => &self.strings,
             Block => &self.blocks,
             Inst => &self.insts,
             Typx => &self.typxs,
             Int => &self.local,
+            Import => &self.root.imports,
+            Extern => &self.root.externs,
+            Varb => &self.root.varbs,
             else => @compileError("No list exists of type: " ++ @typeName(T)),
         };
     }
@@ -162,23 +193,31 @@ const Builder = struct {
         ptr.flow = flow;
     }
 
-    fn trivialize(self: *Builder, comptime T: type, ctx: Context, idx: Int) !T {
-        _ = self;
+    //TODO(high), figure out a way to not have to use names when trivializing functions
+    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, name: Int, typx: Int) !Typx {
+        return switch (ctx.at(ATypx, typx)) {
+            .int => |i| .{ .primitive = .{
+                .bits = i.bits,
+                .sign = i.sign,
+            }},
+            .ct_int => .{ .word = {} },
+            .function => |f| {
+                const p_names = ctx.slice(Int, f.names, f.len);
+                const p_items = ctx.slice(Int, f.items, f.len);
+                const pdx, const items = try self.newSlice(Typx, f.len);
 
-        switch (T) {
-            Typx => {
-                return switch (ctx.at(ATypx, idx)) {
-                    .int => |i| .{ .primitive = .{
-                        .bits = i.bits,
-                        .sign = i.sign,
-                    }},
-                    .ct_int,
-                    .function => .{ .word = {} },
-                    else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
-                };
+                for (p_names, p_items, items) |ndx, src, *dst|
+                    dst.* = try self.trivialize(ctx, tokens, ndx, src);
+
+                return .{ .function = try self.add(Callable{
+                    .name = name,
+                    .prms = pdx,
+                    .len = f.len,
+                    .ret = try self.add(try self.trivialize(ctx, tokens, undefined, f.ret)),
+                }) };
             },
-            else => @compileError("No list exists of type: " ++ @typeName(T)),
-        }
+            else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
+        };
     }
 
     fn drive(self: *Builder) !LocationList {
@@ -235,6 +274,26 @@ const Builder = struct {
 
                 return .{ 0, block };
             },
+            .edecl => {
+                const item = tree.at(node.extra.mon_op);
+
+                switch (item.kind) {
+                    .fproto => {
+                        const name = tokens.slice(node.main+2);
+                        const symbol = try ctx.get(table, name);
+
+                        const ndx = try self.add(name);
+                        const cdx = try self.trivialize(ctx, tokens, ndx, symbol.typx);
+
+                        _ = try self.add(Extern{
+                            .callable = try self.add(cdx),
+                        });
+                    },
+                    else => |k| std.debug.panic("TODO: handle edecl: {}", .{k}),
+                }
+
+                return .{ 0, block };
+            },
             .fdecl => {
                 const name = tokens.slice(node.main+1);
                 const blok = try self.newBlock();
@@ -253,8 +312,8 @@ const Builder = struct {
                 for (p_names, names) |src, *dst|
                     dst.* = tokens.slice(src);
 
-                for (p_items, items) |src, *dst|
-                    dst.* = try self.trivialize(Typx, ctx, src);
+                for (p_names, p_items, items) |prm, src, *dst|
+                    dst.* = try self.trivialize(ctx, tokens, prm, src);
 
                 _ = try self.add(Function{
                     .ident = try self.add(name),
@@ -264,7 +323,7 @@ const Builder = struct {
                             .items = pdx,
                             .len = proto.len,
                         },
-                        .ret = try self.add(try self.trivialize(Typx, ctx, proto.ret)),
+                        .ret = try self.add(try self.trivialize(ctx, tokens, undefined, proto.ret)),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -277,7 +336,9 @@ const Builder = struct {
                 const fdx, block = try self.flatten(ctx, tree, tokens, table, block, call.func);
 
                 const loc = self.at(Location, fdx);
-                const dst = try self.auto(loc.typx);
+                const fun = self.at(Typx, loc.typx).function;
+                const cbl = self.at(Callable, fun);
+                const dst = try self.auto(cbl.ret);
 
                 const list = tree.at(call.args);
                 const items = tree.extras(list.extra);
@@ -320,8 +381,9 @@ const Builder = struct {
             .identifier => {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
+                const ndx = try self.add(name);
 
-                const typx = try self.trivialize(Typx, ctx, symbol.typx);
+                const typx = try self.trivialize(ctx, tokens, ndx, symbol.typx);
                 const src = try self.named(name, try self.add(typx));
 
                 return .{ src, block };
@@ -334,7 +396,7 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.flatten(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const typx = try self.trivialize(Typx, ctx, symbol.typx);
+                        const typx = try self.trivialize(ctx, tokens, try self.add(name), symbol.typx);
                         const dst = try self.named(name, try self.add(typx));
                         _ = try self.add(dst);
 
@@ -428,25 +490,66 @@ const Builder = struct {
         }
     }
 
-    fn emit(self: Builder) !struct { Builder, Graph } {
+    fn emit(self: *Builder) !struct { Builder, Graph } {
+        var names = ArrayList([]const u8).empty;
+        var typxs = ArrayList(Typx).empty;
+        var calls = ArrayList(Callable).empty;
+        var locs = ArrayList(Location).empty;
+        var cons = ArrayList(Constant).empty;
+
+        defer names.deinit(self.allocator);
+        defer typxs.deinit(self.allocator);
+        defer calls.deinit(self.allocator);
+        defer locs.deinit(self.allocator);
+        defer cons.deinit(self.allocator);
+
+        for (self.root.imports.items) |import| {
+            try names.append(self.allocator, self.at([]const u8, import.name));
+            try typxs.append(self.allocator, self.at(Typx, import.typx));
+        }
+
+        for (self.root.externs.items) |ext| {
+            try calls.append(self.allocator, self.at(Callable, ext.callable));
+        }
+
+        for (self.root.varbs.items) |varb| {
+            try locs.append(self.allocator, self.at(Location, varb.local));
+        }
+
+        const imports = StringList{
+            .names = try self.addSlice(names.items),
+            .items = try self.addSlice(typxs.items),
+            .len = @intCast(self.root.imports.items.len),
+        };
+
+        const externs = CallList{
+            .items = try self.addSlice(calls.items),
+            .len = @intCast(self.root.externs.items.len),
+        };
+
+        const varbs = LocationExtraList{
+            .items = try self.addSlice(locs.items),
+            .extra = try self.addSlice(cons.items),
+            .len = @intCast(self.root.varbs.items.len),
+        };
+
         const graph = Graph{
             .functions = self.functions.items,
             .locations = self.locations.items,
             .constants = self.constants.items,
+            .callables = self.callables.items,
             .strings = self.strings.items,
             .blocks = self.blocks.items,
             .insts = self.insts.items,
             .typxs = self.typxs.items,
             .root = .{
-                .varbs = .{
-                    .items = 0,
-                    .extra = 0,
-                    .len = 0,
-                },
+                .imports = imports,
+                .externs = externs,
+                .varbs = varbs,
             },
         };
 
-        return .{ self, graph };
+        return .{ self.*, graph };
     }
 };
 
@@ -456,6 +559,7 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .functions = .empty,
         .locations = .empty,
         .constants = .empty,
+        .callables = .empty,
         .manageds = .empty,
         .strings = .empty,
         .blocks = .empty,
@@ -463,6 +567,8 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .typxs = .empty,
         .local = .empty,
         .root = .{
+            .imports = .empty,
+            .externs = .empty,
             .varbs = .empty,
         },
     };

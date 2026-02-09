@@ -277,6 +277,17 @@ pub const Context = struct {
 
                 return self.add(Typx.NOVAL);
             },
+            .edecl => {
+                const name = tokens.slice(node.main+2);
+                const tdx = try self.examine(tree, tokens, table, node.extra.mon_op);
+
+                try self.put(table, name, .{
+                    .typx = tdx,
+                    .con = 0,
+                });
+
+                return self.add(Typx.NOVAL);
+            },
             .fdecl => {
                 const pdx = try self.examine(tree, tokens, table, node.extra.fdecl.proto);
                 const func = tokens.slice(node.main+1);

@@ -112,6 +112,7 @@ pub const Token = struct {
         @",",
         @".",
         @"fn",
+        @"extern",
         @"destroy",
         @"return",
         @"struct",

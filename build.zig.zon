@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.14.1",
     .dependencies = .{
         .lego = .{
-            .url = "git+https://github.com/significant-cijfer/lego.git#e63c4fac267c76126c2ea85701d81b9849d9df73",
-            .hash = "lego-0.1.0-ULBOY21NAADAEkKIE_E-3lbYt_RnxoW6eMtDSQF3ikrB",
+            .url = "git+https://github.com/significant-cijfer/lego.git#289aa4639a33f605df834521f7cffb4d85e44199",
+            .hash = "lego-0.1.0-ULBOY4JZAADPna1t8zcePCqz0nMbP9qkNpDlzRkmpFnu",
         },
     },
     .paths = .{
