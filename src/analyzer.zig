@@ -44,6 +44,7 @@ pub const Context = struct {
     allocator: Allocator,
     tables: ArrayHashMap(Int, Table),
     constants: ArrayList(Constant),
+    strucs: ArrayList(Struc),
     typxs: ArrayList(Typx),
     extra: ArrayList(Int),
 
@@ -52,6 +53,7 @@ pub const Context = struct {
             .allocator = gpa,
             .tables = .empty,
             .constants = .empty,
+            .strucs = .empty,
             .typxs = .empty,
             .extra = .empty,
         };
@@ -129,6 +131,7 @@ pub const Context = struct {
     fn listOf(self: Context, comptime T: type) []const T {
         return switch (T) {
             Constant => self.constants.items,
+            Struc => self.strucs.items,
             Typx => self.typxs.items,
             Int => self.extra.items,
             else => @compileError("No list exists of type: " ++ @typeName(T)),
@@ -138,6 +141,7 @@ pub const Context = struct {
     fn arrayOf(self: *Context, comptime T: type) *ArrayList(T) {
         return switch (T) {
             Constant => &self.constants,
+            Struc => &self.strucs,
             Typx => &self.typxs,
             Int => &self.extra,
             else => @compileError("No list exists of type: " ++ @typeName(T)),
@@ -243,6 +247,7 @@ pub const Context = struct {
             .undef => true,
             .ct_int => true,
             .int => |s| dst.int.sign == s.sign and dst.int.bits == s.bits,
+            .struc => |s| dst.struc == s,
             .pointer => |p| self.equals(dst.pointer, p),
             else => std.debug.panic("TODO, handle equals: {}", .{src}),
         };
@@ -268,9 +273,8 @@ pub const Context = struct {
                 .int => |d| d.sign == s.sign and d.bits >= s.bits,
                 else => false,
             },
-            .pointer => {
-                std.debug.panic("lhs: {}, rhs: {}", .{self.at(Typx, dst.pointer), self.at(Typx, src.pointer)});
-            },
+            .struc => false,
+            .pointer => false,
             else => std.debug.panic("TODO, handle castable: {}", .{src}),
         };
     }
@@ -356,14 +360,14 @@ pub const Context = struct {
 
                 const params = tree.at(proto.prms);
                 for (tree.extras(params.extra)) |pdx| {
-                    const con = try self.eval(tree, tokens, table, pdx);
+                    const con = try self.eval(tree, tokens, table, pdx, null);
                     const tdx = self.at(Constant, con).typx;
 
                     try names.append(self.allocator, tree.at(pdx).main - 2);
                     try items.append(self.allocator, tdx);
                 }
 
-                const con = try self.eval(tree, tokens, table, proto.rtyp);
+                const con = try self.eval(tree, tokens, table, proto.rtyp, null);
                 const rdx = self.at(Constant, con).typx;
 
                 return self.add(Typx{ .function = .{
@@ -411,11 +415,12 @@ pub const Context = struct {
             },
             .vardef => {
                 const name = tokens.slice(node.main+1);
+                const expr = tree.at(node.extra.bin_op.rhs);
 
-                const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
+                const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs, null);
                 const rev = switch (try self.frameStorage(table)) {
                     .auto => 0,
-                    .root => try self.eval(tree, tokens, table, node.extra.bin_op.rhs),
+                    .root => try self.eval(tree, tokens, table, node.extra.bin_op.rhs, name),
                 };
 
                 const ldx = self.at(Constant, lev).typx;
@@ -426,10 +431,12 @@ pub const Context = struct {
 
                 //TODO, check for linear types in root scope
 
-                try self.put(table, name, .{
-                    .typx = ldx,
-                    .con = rev,
-                });
+                if (expr.kind != .structdef) {
+                    try self.put(table, name, .{
+                        .typx = ldx,
+                        .con = rev,
+                    });
+                }
 
                 return self.add(Typx.NOVAL);
             },
@@ -517,7 +524,7 @@ pub const Context = struct {
         }
     }
 
-    fn eval(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int) Error!Int {
+    fn eval(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int, def: ?[]const u8) Error!Int {
         const node = tree.nodes.items[idx];
 
         errdefer if (error_idx == null) { error_idx = idx ; };
@@ -547,25 +554,36 @@ pub const Context = struct {
 
                 const members = tree.extras(node.extra);
 
+                const struc = try self.add(@as(Struc, undefined));
+                const typx = try self.add(Typx{ .struc = struc });
+                const cdx = try self.add(Constant{ .typx = typx });
+
+                if (def) |name| {
+                    try self.put(table, name, .{
+                        .typx = try self.add(Typx.TYPE),
+                        .con = cdx,
+                    });
+                }
+
                 for (members) |mdx| {
-                    const con = try self.eval(tree, tokens, table, mdx);
+                    const con = try self.eval(tree, tokens, table, mdx, null);
                     const tdx = self.at(Constant, con).typx;
 
                     try names.append(self.allocator, tree.at(mdx).main - 2);
                     try items.append(self.allocator, tdx);
                 }
 
-                const typx = try self.add(Constant{ .struc = .{
+                self.strucs.items[struc] = .{
                     .names = try self.addSlice(names.items),
                     .items = try self.addSlice(items.items),
                     .len = @intCast(names.items.len),
-                }});
+                };
 
-                return self.add(Constant{ .typx = typx });
+                return cdx;
             },
             .add, .sub, .mul, .div => {
-                const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs);
-                const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs);
+                const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs, null);
+                const rev = try self.eval(tree, tokens, table, node.extra.bin_op.rhs, null);
 
                 _ = lev;
                 _ = rev;
@@ -574,7 +592,7 @@ pub const Context = struct {
                 return error.RuntimeEval;
             },
             .ref => {
-                const cdx = try self.eval(tree, tokens, table, node.extra.mon_op);
+                const cdx = try self.eval(tree, tokens, table, node.extra.mon_op, null);
                 const con = self.at(Constant, cdx);
 
                 return switch (con) {
@@ -641,11 +659,7 @@ pub const Typx = union(enum) {
         sign: bool,
     };
 
-    const Struct = struct {
-        names: Int,
-        items: Int,
-        len: Int,
-    };
+    const Struct = Int;
 
     const Pointer = Int;
 
@@ -676,13 +690,13 @@ pub const Typx = union(enum) {
 const Constant = union(enum) {
     typx: Int,
     int: BigInt,
-    struc: Struct,
+    //struc: Struct,
 
-    const Struct = struct {
-        names: Int,
-        items: Int,
-        len: Int,
-    };
+    //const Struct = struct {
+    //    names: Int,
+    //    items: Int,
+    //    len: Int,
+    //};
 
     fn deinit(self: *Constant) void {
         switch (self.*) {
@@ -690,6 +704,12 @@ const Constant = union(enum) {
             else => {},
         }
     }
+};
+
+pub const Struc = struct {
+    names: Int,
+    items: Int,
+    len: Int,
 };
 
 pub fn scan(gpa: Allocator, tree: Ast, tokens: Tokens) !Context {

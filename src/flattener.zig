@@ -31,6 +31,7 @@ const Analyzer = @import("analyzer.zig");
 const Context = Analyzer.Context;
 const Symbol = Analyzer.Symbol;
 const ATypx = Analyzer.Typx;
+const Struc = Analyzer.Struc;
 
 const Int = u32;
 const Vdx = u32;
@@ -200,7 +201,7 @@ const Builder = struct {
         ptr.flow = flow;
     }
 
-    fn trivialize(self: *Builder, ctx: Context, typx: Int) !Typx {
+    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
         return switch (ctx.at(ATypx, typx)) {
             .noval => .{ .noval = {} },
             .int => |i| .{ .primitive = .{
@@ -209,7 +210,7 @@ const Builder = struct {
             }},
             .ct_int => .{ .word = {} },
             .pointer => |p| {
-                const child = try self.add(try self.trivialize(ctx, p));
+                const child = try self.add(try self.trivialize(ctx, tokens, p));
 
                 return .{ .pointer = try self.temp(child) };
             },
@@ -219,9 +220,9 @@ const Builder = struct {
                 defer self.allocator.free(typxs);
 
                 for (p_items, typxs) |src, *dst|
-                    dst.* = try self.add(try self.trivialize(ctx, src));
+                    dst.* = try self.add(try self.trivialize(ctx, tokens, src));
 
-                const ret = try self.add(try self.trivialize(ctx, f.ret));
+                const ret = try self.add(try self.trivialize(ctx, tokens, f.ret));
                 const pdx: Int = @intCast(self.locations.items.len);
 
                 for (typxs) |t|
@@ -233,6 +234,7 @@ const Builder = struct {
                     .ret = try self.temp(ret),
                 }};
             },
+            .struc => .{ .word = {} },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
         };
     }
@@ -330,7 +332,7 @@ const Builder = struct {
                                     .token = try self.add(name),
                                     .temp = false,
                                 },
-                                .typx = try self.add(try self.trivialize(ctx, symbol.typx)),
+                                .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
                             },
                         });
                     },
@@ -359,7 +361,7 @@ const Builder = struct {
                             .token = try self.add(tokens.slice(src)),
                             .temp = false,
                         },
-                        .typx = try self.add(try self.trivialize(ctx, item)),
+                        .typx = try self.add(try self.trivialize(ctx, tokens, item)),
                     };
                 }
 
@@ -370,7 +372,7 @@ const Builder = struct {
                             .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.add(try self.trivialize(ctx, proto.ret)),
+                        .ret = try self.add(try self.trivialize(ctx, tokens, proto.ret)),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -429,7 +431,7 @@ const Builder = struct {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
 
-                const typx = try self.trivialize(ctx, symbol.typx);
+                const typx = try self.trivialize(ctx, tokens, symbol.typx);
                 const src = try self.named(name, try self.add(typx));
 
                 return .{ src, block };
@@ -442,7 +444,7 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const typx = try self.trivialize(ctx, symbol.typx);
+                        const typx = try self.trivialize(ctx, tokens, symbol.typx);
                         const dst = try self.named(name, try self.add(typx));
                         _ = try self.add(dst);
 

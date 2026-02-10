@@ -4,6 +4,14 @@ extern fn putchar(c: i32) void;
 extern fn boxInt(x: i32) &i32;
 extern fn boxPrint(p: &i32) void;
 
+
+let Uint8Array: type = struct {
+    byte: u8,
+    next: Uint8Array,
+};
+
+extern fn createUint8Array(n: i32) &Uint8Array;
+
 fn meaning() i32, {
     return 42;
 };
@@ -33,6 +41,8 @@ fn main() u8, {
     boxPrint(&lint);
 
     putchar(65);
+
+    let arr: &Uint8Array = createUint8Array(16);
 
     return if 1, { return ggez(1); } else ggez(6) + x;
 };
