@@ -1,6 +1,6 @@
 #!/bin/sh
 
-mkdir dup-out
+mkdir -p dup-out
 
 set -xe
 
