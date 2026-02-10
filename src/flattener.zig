@@ -353,6 +353,9 @@ const Builder = struct {
                 const names = ctx.slice(Int, proto.names, proto.len);
                 const items = ctx.slice(Int, proto.items, proto.len);
 
+                if (ctx.at(ATypx, proto.ret) == .noval)
+                    self.finishBlock(block, .{ .ret = try self.temp(try self.add(Typx.NOVAL)) });
+
                 const ldx, const prms = try self.newSlice(Location, proto.len);
 
                 for (names, items, prms) |src, item, *dst| {
@@ -372,7 +375,7 @@ const Builder = struct {
                             .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.add(try self.trivialize(ctx, tokens, proto.ret)),
+                        .ret = try self.temp(try self.add(try self.trivialize(ctx, tokens, proto.ret))),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -535,17 +538,19 @@ const Builder = struct {
 
                 block = try self.newBlock();
                 const lhs, const l_block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+0);
-                _ = try self.add(Inst{ .mov = .{
-                    .dst = dst,
-                    .src = lhs
-                }});
+                if (lhs != 0)
+                    _ = try self.add(Inst{ .mov = .{
+                        .dst = dst,
+                        .src = lhs
+                    }});
 
                 block = try self.newBlock();
                 const rhs, const r_block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.tri_op.mhs+1);
-                _ = try self.add(Inst{ .mov = .{
-                    .dst = dst,
-                    .src = rhs
-                }});
+                if (rhs != 0)
+                    _ = try self.add(Inst{ .mov = .{
+                        .dst = dst,
+                        .src = rhs
+                    }});
 
                 block = try self.newBlock();
 
@@ -561,7 +566,11 @@ const Builder = struct {
                 return .{ dst, block };
             },
             .ret => {
-                const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.mon_op);
+                const src, block = switch (node.extra.mon_op) {
+                    0 => .{ try self.temp(try self.add(Typx.NOVAL)), block },
+                    else => try self.rvalue(ctx, tree, tokens, table, block, node.extra.mon_op)
+                };
+
                 self.finishBlock(block, .{ .ret = src });
 
                 return .{ 0, block };

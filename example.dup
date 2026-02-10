@@ -30,6 +30,10 @@ fn ggez(x: u8) u8, {
     return x * 10;
 };
 
+fn printArray() void, {
+    if 1, return else 1;
+};
+
 fn main() u8, {
     let x: u8 = if 1, 7 else 9;
 
