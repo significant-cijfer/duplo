@@ -12,6 +12,7 @@ const Graph = lego.Graph;
 const Function = lego.Function;
 const Location = lego.Location;
 const Constant = lego.Constant;
+const TypeDef = lego.TypeDef;
 const Block = lego.Block;
 const Inst = lego.Inst;
 const Typx = lego.Typx;
@@ -50,6 +51,7 @@ const Builder = struct {
     functions: ArrayList(Function),
     locations: ArrayList(Location),
     constants: ArrayList(Constant),
+    typedefs: ArrayList(TypeDef),
     manageds: ArrayList(Managed),
     strings: ArrayList([]const u8),
     blocks: ArrayList(Block),
@@ -62,6 +64,7 @@ const Builder = struct {
     const Root = struct {
         imports: ArrayList(Import),
         externs: ArrayList(Extern),
+        typedefs: ArrayList(TypxDef),
         varbs: ArrayList(Varb),
     };
 
@@ -71,6 +74,10 @@ const Builder = struct {
     };
 
     const Extern = struct {
+        local: Location,
+    };
+
+    const TypxDef = struct {
         local: Location,
     };
 
@@ -234,7 +241,7 @@ const Builder = struct {
                     .ret = try self.temp(ret),
                 }};
             },
-            .struc => .{ .word = {} },
+            .struc => .{ .aggregate = {} },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
         };
     }
@@ -584,12 +591,14 @@ const Builder = struct {
         var typxs = ArrayList(Typx).empty;
         var e_locs = ArrayList(Location).empty;
         var v_locs = ArrayList(Location).empty;
+        var defs = ArrayList(Location).empty;
         var cons = ArrayList(Constant).empty;
 
         defer names.deinit(self.allocator);
         defer typxs.deinit(self.allocator);
         defer e_locs.deinit(self.allocator);
         defer v_locs.deinit(self.allocator);
+        defer defs.deinit(self.allocator);
         defer cons.deinit(self.allocator);
 
         for (self.root.imports.items) |import| {
@@ -605,6 +614,10 @@ const Builder = struct {
             try v_locs.append(self.allocator, self.at(Location, varb.local));
         }
 
+        for (self.root.typedefs.items) |def| {
+            try defs.append(self.allocator, def.local);
+        }
+
         const imports = StringList{
             .names = try self.addSlice(names.items),
             .items = try self.addSlice(typxs.items),
@@ -614,6 +627,11 @@ const Builder = struct {
         const externs = LocationList{
             .items = try self.addSlice(e_locs.items),
             .len = @intCast(self.root.externs.items.len),
+        };
+
+        const typxdefs = LocationList{
+            .items = try self.addSlice(defs.items),
+            .len = @intCast(self.root.typedefs.items.len),
         };
 
         const varbs = LocationExtraList{
@@ -626,6 +644,7 @@ const Builder = struct {
             .functions = self.functions.items,
             .locations = self.locations.items,
             .constants = self.constants.items,
+            .typedefs = self.typedefs.items,
             .strings = self.strings.items,
             .blocks = self.blocks.items,
             .insts = self.insts.items,
@@ -633,6 +652,7 @@ const Builder = struct {
             .root = .{
                 .imports = imports,
                 .externs = externs,
+                .typedefs = typxdefs,
                 .varbs = varbs,
             },
         };
@@ -647,6 +667,7 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .functions = .empty,
         .locations = .empty,
         .constants = .empty,
+        .typedefs = .empty,
         .manageds = .empty,
         .strings = .empty,
         .blocks = .empty,
@@ -656,6 +677,7 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .root = .{
             .imports = .empty,
             .externs = .empty,
+            .typedefs = .empty,
             .varbs = .empty,
         },
     };
