@@ -208,43 +208,52 @@ const Builder = struct {
         ptr.flow = flow;
     }
 
-    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
+    fn trivialize(self: *Builder, ctx: Context, name: ?[]const u8, typx: Int) !Int {
+        _ = self;
+        _ = name;
+
         return switch (ctx.at(ATypx, typx)) {
-            .noval => .{ .noval = {} },
-            .int => |i| .{ .primitive = .{
-                .bits = i.bits,
-                .sign = i.sign,
-            }},
-            .ct_int => .{ .word = {} },
-            .pointer => |p| {
-                const child = try self.add(try self.trivialize(ctx, tokens, p));
-
-                return .{ .pointer = try self.temp(child) };
-            },
-            .function => |f| {
-                const p_items = ctx.slice(Int, f.items, f.len);
-                const typxs = try self.allocator.alloc(Int, f.len);
-                defer self.allocator.free(typxs);
-
-                for (p_items, typxs) |src, *dst|
-                    dst.* = try self.add(try self.trivialize(ctx, tokens, src));
-
-                const ret = try self.add(try self.trivialize(ctx, tokens, f.ret));
-                const pdx: Int = @intCast(self.locations.items.len);
-
-                for (typxs) |t|
-                    _ = try self.temp(t);
-
-                return .{ .function = .{
-                    .prms = pdx,
-                    .len = f.len,
-                    .ret = try self.temp(ret),
-                }};
-            },
-            .struc => .{ .aggregate = {} },
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
         };
     }
+
+    //fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
+    //    return switch (ctx.at(ATypx, typx)) {
+    //        .noval => .{ .noval = {} },
+    //        .int => |i| .{ .primitive = .{
+    //            .bits = i.bits,
+    //            .sign = i.sign,
+    //        }},
+    //        .ct_int => .{ .word = {} },
+    //        .pointer => |p| {
+    //            const child = try self.add(try self.trivialize(ctx, tokens, p));
+
+    //            return .{ .pointer = try self.temp(child) };
+    //        },
+    //        .function => |f| {
+    //            const p_items = ctx.slice(Int, f.items, f.len);
+    //            const typxs = try self.allocator.alloc(Int, f.len);
+    //            defer self.allocator.free(typxs);
+
+    //            for (p_items, typxs) |src, *dst|
+    //                dst.* = try self.add(try self.trivialize(ctx, tokens, src));
+
+    //            const ret = try self.add(try self.trivialize(ctx, tokens, f.ret));
+    //            const pdx: Int = @intCast(self.locations.items.len);
+
+    //            for (typxs) |t|
+    //                _ = try self.temp(t);
+
+    //            return .{ .function = .{
+    //                .prms = pdx,
+    //                .len = f.len,
+    //                .ret = try self.temp(ret),
+    //            }};
+    //        },
+    //        .struc => .{ .aggregate = {} },
+    //        else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
+    //    };
+    //}
 
     fn drive(self: *Builder) !LocationList {
         const idx = self.locations.items.len;
@@ -333,15 +342,19 @@ const Builder = struct {
                         const name = tokens.slice(node.main+2);
                         const symbol = try ctx.get(table, name);
 
+                        //TODO, self.at
                         _ = try self.add(Extern{
-                            .local = .{
-                                .code = .{
-                                    .token = try self.add(name),
-                                    .temp = false,
-                                },
-                                .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
-                            },
+                            .local = self.at(Location, try self.trivialize(ctx, name, symbol.typx)),
                         });
+                        //_ = try self.add(Extern{
+                        //    .local = .{
+                        //        .code = .{
+                        //            .token = try self.add(name),
+                        //            .temp = false,
+                        //        },
+                        //        .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
+                        //    },
+                        //});
                     },
                     else => |k| std.debug.panic("TODO: handle edecl: {}", .{k}),
                 }
@@ -366,13 +379,15 @@ const Builder = struct {
                 const ldx, const prms = try self.newSlice(Location, proto.len);
 
                 for (names, items, prms) |src, item, *dst| {
-                    dst.* = .{
-                        .code = .{
-                            .token = try self.add(tokens.slice(src)),
-                            .temp = false,
-                        },
-                        .typx = try self.add(try self.trivialize(ctx, tokens, item)),
-                    };
+                    //TODO, self.at
+                    dst.* = self.at(Location, try self.trivialize(ctx, tokens.slice(src), item));
+                    //dst.* = .{
+                    //    .code = .{
+                    //        .token = try self.add(tokens.slice(src)),
+                    //        .temp = false,
+                    //    },
+                    //    .typx = try self.add(try self.trivialize(ctx, tokens, item)),
+                    //};
                 }
 
                 _ = try self.add(Function{
@@ -382,7 +397,8 @@ const Builder = struct {
                             .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.temp(try self.add(try self.trivialize(ctx, tokens, proto.ret))),
+                        .ret = try self.trivialize(ctx, null, proto.ret),
+                        //.ret = try self.temp(try self.add(try self.trivialize(ctx, tokens, proto.ret))),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -441,8 +457,9 @@ const Builder = struct {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
 
-                const typx = try self.trivialize(ctx, tokens, symbol.typx);
-                const src = try self.named(name, try self.add(typx));
+                const src = try self.trivialize(ctx, name, symbol.typx);
+                //const typx = try self.trivialize(ctx, tokens, symbol.typx);
+                //const src = try self.named(name, try self.add(typx));
 
                 return .{ src, block };
             },
@@ -454,8 +471,9 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const typx = try self.trivialize(ctx, tokens, symbol.typx);
-                        const dst = try self.named(name, try self.add(typx));
+                        const dst = try self.trivialize(ctx, name, symbol.typx);
+                        //const typx = try self.trivialize(ctx, tokens, symbol.typx);
+                        //const dst = try self.named(name, try self.add(typx));
                         _ = try self.add(dst);
 
                         _ = try self.add(Inst{ .mov = .{
