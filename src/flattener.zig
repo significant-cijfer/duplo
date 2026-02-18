@@ -17,6 +17,8 @@ const Block = lego.Block;
 const Inst = lego.Inst;
 const Typx = lego.Typx;
 
+const Code = Location.Code;
+
 const BigInt = lego.BigInt;
 const StringList = lego.StringList;
 const LocationList = lego.LocationList;
@@ -58,8 +60,12 @@ const Builder = struct {
     insts: ArrayList(Inst),
     typxs: ArrayList(Typx),
 
-    local: ArrayList(Int),
+    state: State,
     root: Root,
+
+    const State = struct {
+        locals: ArrayList(Local),
+    };
 
     const Root = struct {
         imports: ArrayList(Import),
@@ -68,13 +74,17 @@ const Builder = struct {
         varbs: ArrayList(Varb),
     };
 
+    const Local = struct {
+        item: Int,
+    };
+
     const Import = struct {
         name: Int,
         typx: Int,
     };
 
     const Extern = struct {
-        local: Location,
+        local: Int,
     };
 
     const TypxDef = struct {
@@ -86,12 +96,12 @@ const Builder = struct {
         local: Int,
     };
 
-    const State = struct {
+    const Flow = struct {
         Vdx, // location
         Int, // block
     };
 
-    const StateEffect = struct {
+    const FlowEffect = struct {
         Vdx, // location
         Int, // block
         bool, // direct
@@ -109,7 +119,8 @@ const Builder = struct {
         self.blocks.deinit(self.allocator);
         self.insts.deinit(self.allocator);
         self.typxs.deinit(self.allocator);
-        self.local.deinit(self.allocator);
+
+        self.state.locals.deinit(self.allocator);
 
         self.root.imports.deinit(self.allocator);
         self.root.externs.deinit(self.allocator);
@@ -144,7 +155,7 @@ const Builder = struct {
             Block => &self.blocks,
             Inst => &self.insts,
             Typx => &self.typxs,
-            Int => &self.local,
+            Local => &self.state.locals,
             Import => &self.root.imports,
             Extern => &self.root.externs,
             Varb => &self.root.varbs,
@@ -208,13 +219,47 @@ const Builder = struct {
         ptr.flow = flow;
     }
 
-    fn trivialize(self: *Builder, ctx: Context, name: ?[]const u8, typx: Int) !Int {
-        _ = self;
-        _ = name;
+    fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, name: ?[]const u8, typx: Int) !Int {
+        const orig = ctx.at(ATypx, typx);
 
-        return switch (ctx.at(ATypx, typx)) {
+        const ident = name orelse switch (orig) {
+            .struc => |s| b: {
+                const struc = ctx.at(Struc, s);
+
+                break :b if (struc.ident > 0) tokens.slice(struc.ident) else null;
+            },
+            else => null,
+        };
+
+        const triv: Typx = switch (orig) {
+            .noval => .noval,
+            .int => |i| .{ .primitive = .{
+                .bits = i.bits,
+                .sign = i.sign,
+            }},
+            .pointer => |p| .{
+                .pointer = try self.trivialize(ctx, tokens, null, p)
+            },
+            .function => |f| b: {
+                const pdx, const prms = try self.newSlice(Location, f.len);
+                const ret = try self.trivialize(ctx, tokens, null, f.ret);
+
+                for (ctx.slice(Int, f.items, f.len), prms) |src, *dst| {
+                    const loc = try self.trivialize(ctx, tokens, null, src);
+                    dst.* = self.at(Location, loc);
+                }
+
+                break :b .{ .function = .{
+                    .prms = pdx,
+                    .len = f.len,
+                    .ret = ret,
+                }};
+            },
+            .struc => .aggregate,
             else => |t| std.debug.panic("TODO, handle trivialize for: {s}", .{ @tagName(t) }),
         };
+
+        return self.location(ident, try self.add(triv));
     }
 
     //fn trivialize(self: *Builder, ctx: Context, tokens: Tokens, typx: Int) !Typx {
@@ -257,12 +302,12 @@ const Builder = struct {
 
     fn drive(self: *Builder) !LocationList {
         const idx = self.locations.items.len;
-        const len = self.local.items.len;
+        const len = self.state.locals.items.len;
 
-        for (self.local.items) |item|
-            _ = try self.add(self.at(Location, item));
+        for (self.state.locals.items) |local|
+            _ = try self.add(self.at(Location, local.item));
 
-        self.local.clearRetainingCapacity();
+        self.state.locals.clearRetainingCapacity();
 
         return .{
             .items = @intCast(idx),
@@ -270,34 +315,34 @@ const Builder = struct {
         };
     }
 
-    fn temp(self: *Builder, typx: Int) !Int {
-        return self.add(Location{
-            .code = .{
+    fn code(self: *Builder, name: ?[]const u8) !Code {
+        return if (name) |n|
+            .{
+                .token = try self.add(n),
+                .temp = false,
+            }
+        else
+            .{
                 .token = @intCast(self.locations.items.len),
                 .temp = true,
-            },
+            };
+    }
+
+    fn location(self: *Builder, name: ?[]const u8, typx: Int) !Int {
+        return self.add(Location{
+            .code = try self.code(name),
             .typx = typx,
         });
     }
 
     fn auto(self: *Builder, typx: Int) !Int {
-        const idx = try self.temp(typx);
+        const idx = try self.location(null, typx);
 
-        _ = try self.add(idx);
+        _ = try self.add(Local{ .item = idx });
         return idx;
     }
 
-    fn named(self: *Builder, name: []const u8, typx: Int) !Int {
-        return self.add(Location{
-            .code = .{
-                .token = try self.add(name),
-                .temp = false,
-            },
-            .typx = typx,
-        });
-    }
-
-    fn lvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!StateEffect {
+    fn lvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!FlowEffect {
         const node = tree.at(idx);
         var block = _block;
 
@@ -318,7 +363,7 @@ const Builder = struct {
         }
     }
 
-    fn rvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!State {
+    fn rvalue(self: *Builder, ctx: Context, tree: Ast, tokens: Tokens, table: Int, _block: Int, idx: Int) Error!Flow {
         const node = tree.at(idx);
         var block = _block;
 
@@ -342,19 +387,9 @@ const Builder = struct {
                         const name = tokens.slice(node.main+2);
                         const symbol = try ctx.get(table, name);
 
-                        //TODO, self.at
                         _ = try self.add(Extern{
-                            .local = self.at(Location, try self.trivialize(ctx, name, symbol.typx)),
+                            .local = try self.trivialize(ctx, tokens, name, symbol.typx),
                         });
-                        //_ = try self.add(Extern{
-                        //    .local = .{
-                        //        .code = .{
-                        //            .token = try self.add(name),
-                        //            .temp = false,
-                        //        },
-                        //        .typx = try self.add(try self.trivialize(ctx, tokens, symbol.typx)),
-                        //    },
-                        //});
                     },
                     else => |k| std.debug.panic("TODO: handle edecl: {}", .{k}),
                 }
@@ -374,20 +409,13 @@ const Builder = struct {
                 const items = ctx.slice(Int, proto.items, proto.len);
 
                 if (ctx.at(ATypx, proto.ret) == .noval)
-                    self.finishBlock(block, .{ .ret = try self.temp(try self.add(Typx.NOVAL)) });
+                    self.finishBlock(block, .{ .ret = try self.location(null, try self.add(Typx.NOVAL)) });
 
                 const ldx, const prms = try self.newSlice(Location, proto.len);
 
                 for (names, items, prms) |src, item, *dst| {
-                    //TODO, self.at
-                    dst.* = self.at(Location, try self.trivialize(ctx, tokens.slice(src), item));
-                    //dst.* = .{
-                    //    .code = .{
-                    //        .token = try self.add(tokens.slice(src)),
-                    //        .temp = false,
-                    //    },
-                    //    .typx = try self.add(try self.trivialize(ctx, tokens, item)),
-                    //};
+                    const loc = try self.trivialize(ctx, tokens, tokens.slice(src), item);
+                    dst.* = self.at(Location, loc);
                 }
 
                 _ = try self.add(Function{
@@ -397,8 +425,7 @@ const Builder = struct {
                             .items = ldx,
                             .len = proto.len,
                         },
-                        .ret = try self.trivialize(ctx, null, proto.ret),
-                        //.ret = try self.temp(try self.add(try self.trivialize(ctx, tokens, proto.ret))),
+                        .ret = try self.trivialize(ctx, tokens, null, proto.ret),
                     },
                     .varbs = try self.drive(),
                     .block = blok,
@@ -457,10 +484,7 @@ const Builder = struct {
                 const name = tokens.slice(node.main);
                 const symbol = try ctx.get(table, name);
 
-                const src = try self.trivialize(ctx, name, symbol.typx);
-                //const typx = try self.trivialize(ctx, tokens, symbol.typx);
-                //const src = try self.named(name, try self.add(typx));
-
+                const src = try self.trivialize(ctx, tokens, name, symbol.typx);
                 return .{ src, block };
             },
             .vardef => {
@@ -471,10 +495,8 @@ const Builder = struct {
                     .auto => {
                         const src, block = try self.rvalue(ctx, tree, tokens, table, block, node.extra.bin_op.rhs);
 
-                        const dst = try self.trivialize(ctx, name, symbol.typx);
-                        //const typx = try self.trivialize(ctx, tokens, symbol.typx);
-                        //const dst = try self.named(name, try self.add(typx));
-                        _ = try self.add(dst);
+                        const dst = try self.trivialize(ctx, tokens, name, symbol.typx);
+                        _ = try self.add(Local{ .item = dst });
 
                         _ = try self.add(Inst{ .mov = .{
                             .dst = dst,
@@ -592,7 +614,7 @@ const Builder = struct {
             },
             .ret => {
                 const src, block = switch (node.extra.mon_op) {
-                    0 => .{ try self.temp(try self.add(Typx.NOVAL)), block },
+                    0 => .{ try self.location(null, try self.add(Typx.NOVAL)), block },
                     else => try self.rvalue(ctx, tree, tokens, table, block, node.extra.mon_op)
                 };
 
@@ -625,7 +647,7 @@ const Builder = struct {
         }
 
         for (self.root.externs.items) |ext| {
-            try e_locs.append(self.allocator, ext.local);
+            try e_locs.append(self.allocator, self.at(Location, ext.local));
         }
 
         for (self.root.varbs.items) |varb| {
@@ -691,7 +713,9 @@ pub fn flatten(gpa: Allocator, ctx: Context, tree: Ast, tokens: Tokens) !struct 
         .blocks = .empty,
         .insts = .empty,
         .typxs = .empty,
-        .local = .empty,
+        .state = .{
+            .locals = .empty,
+        },
         .root = .{
             .imports = .empty,
             .externs = .empty,

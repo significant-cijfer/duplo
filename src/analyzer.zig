@@ -185,7 +185,7 @@ pub const Context = struct {
         const t = self.tables.getPtr(table)
             orelse return error.UndefinedTable;
 
-        if (t.symbols.contains(key))
+        if (self.get(table, key) catch null) |_|
             return error.ShadowedKey;
 
         return t.symbols.putNoClobber(self.allocator, key, symbol);
@@ -420,7 +420,7 @@ pub const Context = struct {
                 const lev = try self.eval(tree, tokens, table, node.extra.bin_op.lhs, null);
                 const rev = switch (try self.frameStorage(table)) {
                     .auto => 0,
-                    .root => try self.eval(tree, tokens, table, node.extra.bin_op.rhs, name),
+                    .root => try self.eval(tree, tokens, table, node.extra.bin_op.rhs, node.main+1),
                 };
 
                 const ldx = self.at(Constant, lev).typx;
@@ -524,7 +524,7 @@ pub const Context = struct {
         }
     }
 
-    fn eval(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int, def: ?[]const u8) Error!Int {
+    fn eval(self: *Context, tree: Ast, tokens: Tokens, table: Int, idx: Int, def: ?Int) Error!Int {
         const node = tree.nodes.items[idx];
 
         errdefer if (error_idx == null) { error_idx = idx ; };
@@ -559,7 +559,7 @@ pub const Context = struct {
                 const cdx = try self.add(Constant{ .typx = typx });
 
                 if (def) |name| {
-                    try self.put(table, name, .{
+                    try self.put(table, tokens.slice(name), .{
                         .typx = try self.add(Typx.TYPE),
                         .con = cdx,
                     });
@@ -574,6 +574,7 @@ pub const Context = struct {
                 }
 
                 self.strucs.items[struc] = .{
+                    .ident = def orelse 0,
                     .names = try self.addSlice(names.items),
                     .items = try self.addSlice(items.items),
                     .len = @intCast(names.items.len),
@@ -707,6 +708,7 @@ const Constant = union(enum) {
 };
 
 pub const Struc = struct {
+    ident: Int,
     names: Int,
     items: Int,
     len: Int,
